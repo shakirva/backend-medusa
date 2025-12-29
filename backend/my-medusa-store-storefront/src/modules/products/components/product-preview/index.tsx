@@ -5,6 +5,7 @@ import { HttpTypes } from "@medusajs/types"
 import LocalizedClientLink from "@modules/common/components/localized-client-link"
 import Thumbnail from "../thumbnail"
 import PreviewPrice from "./price"
+import WishlistToggle from "@modules/wishlist/components/wishlist-toggle"
 
 export default async function ProductPreview({
   product,
@@ -43,6 +44,7 @@ export default async function ProductPreview({
           </Text>
           <div className="flex items-center gap-x-2">
             {cheapestPrice && <PreviewPrice price={cheapestPrice} />}
+            <WishlistToggle productId={product.id!} />
           </div>
         </div>
       </div>

@@ -18,6 +18,13 @@ const nextConfig = {
       fullUrl: true,
     },
   },
+  // Reduce caching in development for dynamic data
+  experimental: {
+    staleTimes: {
+      dynamic: 0,
+      static: 0,
+    },
+  },
   eslint: {
     ignoreDuringBuilds: true,
   },

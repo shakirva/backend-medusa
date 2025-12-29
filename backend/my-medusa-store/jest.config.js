@@ -8,7 +8,11 @@ module.exports = {
       {
         jsc: {
           parser: { syntax: "typescript", decorators: true },
+          target: "es2022",
+          transform: { hidden: { jest: true } },
         },
+        sourceMaps: "inline",
+        module: { type: "commonjs" },
       },
     ],
   },

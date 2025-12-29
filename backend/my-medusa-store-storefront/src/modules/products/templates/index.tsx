@@ -10,6 +10,7 @@ import SkeletonRelatedProducts from "@modules/skeletons/templates/skeleton-relat
 import { notFound } from "next/navigation"
 import ProductActionsWrapper from "./product-actions-wrapper"
 import { HttpTypes } from "@medusajs/types"
+import ReviewsSection from "@modules/reviews/components/reviews-section"
 
 type ProductTemplateProps = {
   product: HttpTypes.StoreProduct
@@ -60,6 +61,12 @@ const ProductTemplate: React.FC<ProductTemplateProps> = ({
       >
         <Suspense fallback={<SkeletonRelatedProducts />}>
           <RelatedProducts product={product} countryCode={countryCode} />
+        </Suspense>
+      </div>
+      <div className="content-container my-12">
+        {/* Reviews Section */}
+        <Suspense fallback={<div className="text-sm text-neutral-500">Loading reviews…</div>}>
+          <ReviewsSection product={product} />
         </Suspense>
       </div>
     </>

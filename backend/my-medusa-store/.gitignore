@@ -23,4 +23,9 @@ build
 !.yarn/sdks
 !.yarn/versions
 
+.medusatest.sqlite
+static/uploads/
+# Medusa build artifacts
+public/admin
 .medusa
+

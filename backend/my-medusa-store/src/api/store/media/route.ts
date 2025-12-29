@@ -1,0 +1,54 @@
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { MEDIA_MODULE } from "../../../modules/media"
+
+export const AUTHENTICATE = false
+
+export async function GET(req: MedusaRequest, res: MedusaResponse) {
+  try {
+    const mediaService = req.scope.resolve(MEDIA_MODULE) as any
+    const gallery_id = req.query.gallery_id as string | undefined
+    let items: any[] = []
+    let count = 0
+
+    if (gallery_id) {
+      const mediaIds = await mediaService.listGalleryMediaIds(gallery_id)
+      if (!mediaIds || !mediaIds.length) return res.json({ media: [], count: 0 })
+      const [rows, c] = await mediaService.listAndCountMedia({ id: { $in: mediaIds } }, { take: 200 })
+      items = rows || []
+      count = c || 0
+    } else {
+      const [rows, c] = await mediaService.listAndCountMedia({ }, { take: 200 })
+      items = rows || []
+      count = c || 0
+    }
+
+    const getOrigin = () => {
+      const fromEnv = process.env.MEDUSA_URL
+      if (fromEnv) return fromEnv.replace(/\/$/, '')
+      return `${(req.headers['x-forwarded-proto'] as string) || (req.protocol as string) || 'http'}://${req.headers.host || 'localhost:9000'}`
+    }
+
+    const origin = getOrigin()
+    const makeAbsolute = (u: string | null) => {
+      if (!u) return null
+      if (u.startsWith('http://') || u.startsWith('https://')) return u
+      const path = u.startsWith('/') ? u : `/${u}`
+      return `${origin}${path}`
+    }
+
+    const media = items.map((m: any) => ({
+      id: m.id,
+      url: makeAbsolute(m.url || null),
+      mime_type: m.mime_type || null,
+      title: m.title || null,
+      alt_text: m.alt_text || null,
+      thumbnail_url: makeAbsolute(m.thumbnail_url || null),
+      metadata: m.metadata || null,
+    }))
+
+    res.json({ media, count })
+  } catch (e: any) {
+    console.error('Store media GET error:', e)
+    res.status(500).json({ message: e?.message || 'Failed to list media' })
+  }
+}
