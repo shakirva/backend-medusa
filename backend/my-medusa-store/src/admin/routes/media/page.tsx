@@ -1,6 +1,6 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk"
 import { Photo, Trash } from "@medusajs/icons"
-import { Container, Heading, Button, Input, createDataTableColumnHelper, DataTable, DataTablePaginationState, useDataTable, Drawer } from "@medusajs/ui"
+import { Container, Heading, Button, Input, createDataTableColumnHelper, DataTable, DataTablePaginationState, useDataTable, Drawer, Badge } from "@medusajs/ui"
 import { useRef, useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { sdk } from "../../lib/sdk"
@@ -10,7 +10,12 @@ type Media = {
   url?: string | null
   mime_type?: string | null
   title?: string | null
+  title_ar?: string | null
   thumbnail_url?: string | null
+  brand?: string | null
+  views?: number | null
+  display_order?: number | null
+  is_featured?: boolean | null
 }
 
 type MediaResponse = { media: Media[]; count: number }
@@ -84,7 +89,16 @@ const MediaPage = () => {
       if (!isThumbnail && autoCreate && uploadedUrl) {
           try {
             setSubmitting(true)
-            const payload: any = { url: uploadedUrl, title: newMedia.title || file.name, mime_type: file.type }
+            const payload: any = { 
+              url: uploadedUrl, 
+              title: newMedia.title || file.name, 
+              title_ar: newMedia.title_ar,
+              mime_type: file.type,
+              brand: newMedia.brand || 'Markasouq',
+              views: newMedia.views || 0,
+              display_order: newMedia.display_order || 0,
+              is_featured: newMedia.is_featured || false
+            }
             if (newMedia.thumbnail_url) payload.thumbnail_url = newMedia.thumbnail_url
             await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
             setMessage('Media record created')
@@ -113,7 +127,16 @@ const MediaPage = () => {
     if (!newMedia.url) return
     setSubmitting(true)
     try {
-      const payload: any = { url: newMedia.url, title: newMedia.title, mime_type: newMedia.mime_type }
+      const payload: any = { 
+        url: newMedia.url, 
+        title: newMedia.title, 
+        title_ar: newMedia.title_ar,
+        mime_type: newMedia.mime_type,
+        brand: newMedia.brand || 'Markasouq',
+        views: newMedia.views || 0,
+        display_order: newMedia.display_order || 0,
+        is_featured: newMedia.is_featured || false
+      }
       if (newMedia.thumbnail_url) payload.thumbnail_url = newMedia.thumbnail_url
       await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
       setOpenCreate(false)
@@ -135,12 +158,23 @@ const MediaPage = () => {
   const columns = [
     columnHelper.accessor('id', { header: 'ID', cell: ({ getValue }) => getValue().substring(0, 8) + '...' }),
     columnHelper.accessor('title', { header: 'Title', cell: ({ getValue }) => getValue() || '-' }),
+    columnHelper.accessor('brand', { header: 'Brand', cell: ({ getValue }) => getValue() || 'Markasouq' }),
+    columnHelper.display({ id: 'type', header: 'Type', cell: ({ row }) => (
+      <Badge color={row.original.mime_type?.startsWith('video') ? 'purple' : 'blue'}>
+        {row.original.mime_type?.startsWith('video') ? 'Video' : 'Image'}
+      </Badge>
+    )}),
     columnHelper.display({ id: 'preview', header: 'Preview', cell: ({ row }) => (
       row.original.mime_type && row.original.mime_type.startsWith('video') ? (
         <video src={row.original.url || ''} poster={row.original.thumbnail_url || undefined} className="w-24 h-16 object-contain" controls />
       ) : (
         row.original.url ? <img src={row.original.url} className="w-24 h-16 object-contain" /> : <div className="w-24 h-16 bg-gray-100" />
       )
+    )}),
+    columnHelper.accessor('views', { header: 'Views', cell: ({ getValue }) => getValue() || 0 }),
+    columnHelper.accessor('display_order', { header: 'Order', cell: ({ getValue }) => getValue() || 0 }),
+    columnHelper.display({ id: 'featured', header: 'Featured', cell: ({ row }) => (
+      row.original.is_featured ? <Badge color="green">Yes</Badge> : <span className="text-gray-400">No</span>
     )}),
     columnHelper.display({ id: 'actions', header: 'Actions', cell: ({ row }) => (
       <div className="flex gap-2">
@@ -168,8 +202,18 @@ const MediaPage = () => {
         </Drawer.Header>
         <Drawer.Body>
           <div className="flex flex-col gap-4">
-            <Input placeholder="Title" value={newMedia.title || ''} onChange={(e) => setNewMedia((p) => ({ ...p, title: e.target.value }))} />
-            <Input placeholder="Mime Type (optional)" value={newMedia.mime_type || ''} onChange={(e) => setNewMedia((p) => ({ ...p, mime_type: e.target.value }))} />
+            <Input placeholder="Title (English)" value={newMedia.title || ''} onChange={(e) => setNewMedia((p) => ({ ...p, title: e.target.value }))} />
+            <Input placeholder="Title (Arabic)" value={newMedia.title_ar || ''} onChange={(e) => setNewMedia((p) => ({ ...p, title_ar: e.target.value }))} dir="rtl" />
+            <Input placeholder="Brand Name" value={newMedia.brand || ''} onChange={(e) => setNewMedia((p) => ({ ...p, brand: e.target.value }))} />
+            <div className="grid grid-cols-2 gap-3">
+              <Input placeholder="Display Order" type="number" value={newMedia.display_order || 0} onChange={(e) => setNewMedia((p) => ({ ...p, display_order: parseInt(e.target.value) || 0 }))} />
+              <Input placeholder="Initial Views" type="number" value={newMedia.views || 0} onChange={(e) => setNewMedia((p) => ({ ...p, views: parseInt(e.target.value) || 0 }))} />
+            </div>
+            <div className="flex items-center gap-3">
+              <input id="isFeatured" type="checkbox" checked={!!newMedia.is_featured} onChange={(e) => setNewMedia((p) => ({ ...p, is_featured: e.target.checked }))} />
+              <label htmlFor="isFeatured" className="text-sm">Featured Video (show prominently)</label>
+            </div>
+            <Input placeholder="Mime Type (auto-detected)" value={newMedia.mime_type || ''} onChange={(e) => setNewMedia((p) => ({ ...p, mime_type: e.target.value }))} />
             <div>
               <div
                 onDragOver={(e) => e.preventDefault()}
