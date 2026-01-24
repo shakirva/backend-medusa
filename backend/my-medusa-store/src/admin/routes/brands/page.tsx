@@ -397,7 +397,7 @@ const BrandsPage = () => {
               Brands Management
             </Heading>
             <Text className="text-gray-500 mt-1">
-              Manage your store brands with pill-shaped logos
+              Manage your store brands with pill-shaped logos shakir
             </Text>
           </div>
           <Button onClick={handleOpenCreate} className="sm:w-auto w-full">

@@ -1,63 +1,59 @@
+# =========================
 # Dependencies
+# =========================
 node_modules/
-/node_modules
 
-# Lock files - REMOVED for cross-platform compatibility (macOS ARM64 dev -> Linux x64 prod)
-# Native bindings differ between architectures, causing install failures
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
-
-# Build output
-/dist
-build
-.cache
-.medusa
-
+# =========================
 # Environment files
+# =========================
 .env
-.env.local
-.env.*.local
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE
-.idea
-.vscode
-
-# Uploads & static generated
-/uploads
-static/uploads/
-
-# Testing
-coverage
-
-# Debug logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# TypeScript
-./tsconfig.tsbuildinfo
-*.tsbuildinfo
-
-# Database dumps
+.env.*
 medusa-db.sql
+
+# =========================
+# OS / Editor junk
+# =========================
+.DS_Store
+.idea/
+.vscode/
+
+# =========================
+# Logs
+# =========================
+yarn-error.log
+npm-debug.log*
+pnpm-debug.log*
+
+# =========================
+# Build output
+# =========================
+dist/
+build/
+.medusa/
+.cache/
+coverage/
+tsconfig.tsbuildinfo
+
+# =========================
+# Database files
+# =========================
+*.sqlite
+*.sqlite3
 .medusatest.sqlite
+test.sqlite
 
-# Medusa build artifacts
-public/admin
+# =========================
+# Uploads & media (runtime)
+# =========================
+uploads/
+static/uploads/
+static/*.jpg
+static/*.png
+static/*.mp4
 
-# Yarn
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/sdks
-!.yarn/versions
-
-# Keep source files
-!src/**
-
+# =========================
+# Package manager locks (IMPORTANT)
+# =========================
+yarn.lock
+package-lock.json
+pnpm-lock.yaml

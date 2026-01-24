@@ -4,6 +4,7 @@ import Busboy from "busboy"
 import path from "path"
 import fs from "fs"
 import mime from "mime-types"
+import { injectBranding } from "./middlewares/branding"
 
 // Development-only middleware to safely handle multipart/form-data for admin
 // upload routes. This avoids the global JSON/body parser from interfering
@@ -95,6 +96,11 @@ export default defineMiddlewares({
     {
       matcher: "/admin/media/upload",
       middlewares: [adminMultipartGuard],
+    },
+    {
+      // Inject marqasouq branding into admin pages
+      matcher: "/app/*",
+      middlewares: [injectBranding],
     },
   ],
 })
