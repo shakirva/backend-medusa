@@ -32,6 +32,7 @@
     "create:categories": "medusa exec ./src/scripts/create-categories.ts",
     "create:sample-video": "medusa exec ./src/scripts/create-sample-video.ts",
     "sync:odoo": "medusa exec ./src/scripts/odoo-sync.ts",
+    "sync:inventory": "medusa exec ./src/scripts/odoo-inventory-sync.ts",
     "sync:images": "medusa exec ./src/scripts/sync-odoo-images.ts",
     "sync:orders": "medusa exec ./src/scripts/sync-odoo-orders.ts",
     "sync:customers": "medusa exec ./src/scripts/sync-odoo-customers.ts",

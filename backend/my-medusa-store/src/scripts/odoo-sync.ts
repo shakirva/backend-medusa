@@ -204,8 +204,8 @@ export default async function odooSync({ container }: ExecArgs) {
             sku: sku,
             prices: [
               {
-                amount: Math.round(odooProduct.list_price * 100),
-                currency_code: "usd"
+                amount: Math.round(odooProduct.list_price * 1000), // KWD uses 3 decimal places (fils)
+                currency_code: "kwd"
               }
             ],
             options: {
