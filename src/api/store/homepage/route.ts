@@ -20,9 +20,6 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const mediaService = req.scope.resolve(MEDIA_MODULE) as any
     const productService = req.scope.resolve(Modules.PRODUCT) as any
 
-    // 1) Banners (hero)
-    const [heroRows] = await mediaService.listAndCountBanners({ is_active: true, position: "hero" }, { order: { display_order: "ASC" }, take: 12 })
-
     const origin = (() => {
       const fromEnv = process.env.MEDUSA_URL
       if (fromEnv) return fromEnv.replace(/\/$/, '')
@@ -36,12 +33,26 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       return `${origin}${path}`
     }
 
-    const banners = (heroRows || []).map((b: any) => ({
+    // Helper function to map banner rows to response format
+    const mapBanners = (rows: any[]) => (rows || []).map((b: any) => ({
       id: b.id,
       title: b.title || null,
       link: b.link || null,
+      position: b.position || null,
       image_url: makeAbsolute(b.image_url || null),
+      media: { url: makeAbsolute(b.image_url || null) },
     }))
+
+    // 1) Banners - fetch all types (hero, single, dual, triple)
+    const [heroRows] = await mediaService.listAndCountBanners({ is_active: true, position: "hero" }, { order: { display_order: "ASC" }, take: 12 })
+    const [singleRows] = await mediaService.listAndCountBanners({ is_active: true, position: "single" }, { order: { display_order: "ASC" }, take: 4 })
+    const [dualRows] = await mediaService.listAndCountBanners({ is_active: true, position: "dual" }, { order: { display_order: "ASC" }, take: 4 })
+    const [tripleRows] = await mediaService.listAndCountBanners({ is_active: true, position: "triple" }, { order: { display_order: "ASC" }, take: 6 })
+
+    const banners = mapBanners(heroRows)
+    const singleBanners = mapBanners(singleRows)
+    const dualBanners = mapBanners(dualRows)
+    const tripleBanners = mapBanners(tripleRows)
 
     // Load optional collection-first mapping from env var. Expected shape:
     // { "host_deals": "pcol_..." } or allow handles: { "host_deals": "powerbanks" }
@@ -265,6 +276,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     // and denormalized product objects under `products` for each product_grid section.
     const sections = [
       { id: 'hero', type: 'banner', items: banners },
+      { id: 'single_banner', type: 'banner', position: 'single', items: singleBanners },
+      { id: 'dual_banner', type: 'banner', position: 'dual', items: dualBanners },
+      { id: 'triple_banner', type: 'banner', position: 'triple', items: tripleBanners },
       {
         id: 'host_deals',
         type: 'product_grid',
@@ -302,7 +316,18 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       },
     ]
 
-    res.json({ locale: req.query.locale || 'en', generated_at: new Date().toISOString(), sections })
+    // Also include banners separately at top level for easier frontend access
+    res.json({ 
+      locale: req.query.locale || 'en', 
+      generated_at: new Date().toISOString(), 
+      sections,
+      banners: {
+        hero: banners,
+        single: singleBanners,
+        dual: dualBanners,
+        triple: tripleBanners,
+      }
+    })
   } catch (e: any) {
     console.error('Homepage endpoint error:', e)
     res.status(500).json({ message: e?.message || 'Failed to build homepage' })
