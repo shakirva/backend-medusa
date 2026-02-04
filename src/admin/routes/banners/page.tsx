@@ -52,12 +52,12 @@ const BannersPage = () => {
       const form = new FormData()
       form.append("file", file)
       
-      // Use native fetch directly to backend absolute URL.
-      // Do NOT set Content-Type manually so browser includes multipart boundary.
-      const response = await fetch("http://localhost:9000/uploads", {
+      // Use relative URL so it works on both localhost and production
+      // The admin dashboard is served from the same origin as the backend
+      const response = await fetch("/admin/uploads", {
         method: "POST",
         body: form,
-        // include credentials if admin uses cookie-based auth; otherwise backend route is temporarily unauthenticated
+        // include credentials for admin auth
         credentials: "include",
       })
       

@@ -34,6 +34,20 @@ export default defineConfig({
             id: "emailpass",
             options: {},
           },
+          // Google OAuth - only enabled if credentials are set
+          ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+            ? [
+                {
+                  resolve: "@medusajs/auth-google",
+                  id: "google",
+                  options: {
+                    clientId: process.env.GOOGLE_CLIENT_ID,
+                    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+                    callbackUrl: process.env.GOOGLE_CALLBACK_URL || "http://localhost:9000/auth/customer/google/callback",
+                  },
+                },
+              ]
+            : []),
         ],
       },
     },
@@ -44,5 +58,36 @@ export default defineConfig({
     media: { resolve: "./src/modules/media" },
     sellers: { resolve: "./src/modules/sellers" },
     warranty: { resolve: "./src/modules/warranty" },
+
+    // Notification module for email notifications
+    notification: {
+      resolve: "@medusajs/notification",
+      options: {
+        providers: [
+          // SendGrid for production emails
+          ...(process.env.SENDGRID_API_KEY
+            ? [
+                {
+                  resolve: "@medusajs/notification-sendgrid",
+                  id: "sendgrid",
+                  options: {
+                    channels: ["email"],
+                    api_key: process.env.SENDGRID_API_KEY,
+                    from: process.env.SENDGRID_FROM || "noreply@markasouq.com",
+                  },
+                },
+              ]
+            : []),
+          // Local notification provider (logs to console in development)
+          {
+            resolve: "@medusajs/notification-local",
+            id: "local",
+            options: {
+              channels: ["email", "log"],
+            },
+          },
+        ],
+      },
+    },
   },
 })
