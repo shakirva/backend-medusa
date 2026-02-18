@@ -41,8 +41,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       url: makeAbsolute(m.url || null),
       mime_type: m.mime_type || null,
       title: m.title || null,
+      title_ar: m.title_ar || null,
       alt_text: m.alt_text || null,
       thumbnail_url: makeAbsolute(m.thumbnail_url || null),
+      brand: m.brand || null,
+      views: m.views ?? 0,
+      display_order: m.display_order ?? 0,
+      is_featured: !!m.is_featured,
       metadata: m.metadata || null,
     }))
 

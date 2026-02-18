@@ -365,6 +365,8 @@ class OdooSyncService {
         odoo_id: odooProduct.id,
         odoo_sku: odooProduct.default_code || null,
         odoo_barcode: odooProduct.barcode || null,
+        odoo_stock: Math.floor(odooProduct.qty_available || 0),
+        odoo_price: odooProduct.list_price ?? null,
         odoo_category_id: odooProduct.categ_id
           ? odooProduct.categ_id[0]
           : null,
@@ -379,12 +381,9 @@ class OdooSyncService {
           title: "Default",
           sku: (odooProduct.default_code as string) || `ODOO-${odooProduct.id}`,
           inventory_quantity: Math.floor(odooProduct.qty_available || 0),
-          prices: [
-            {
-              amount: Math.round(odooProduct.list_price * 100), // Convert to cents
-              currency_code: "aed", // Default currency, can be configured
-            },
-          ],
+          // Keep amount management separate from Odoo sync.
+          // Price is stored in metadata (odoo_price) for reference only.
+          prices: [],
           metadata: {
             odoo_product_id: odooProduct.id,
           },
