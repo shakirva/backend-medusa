@@ -21,6 +21,11 @@ export default defineConfig({
   },
 
   admin: {
+    vite: () => ({
+      server: {
+        allowedHosts: ["admin.markasouqs.com", "localhost", "127.0.0.1"],
+      },
+    }),
     path: "/app",
   },
 

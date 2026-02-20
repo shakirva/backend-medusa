@@ -27,8 +27,6 @@ export async function POST(
   res: MedusaResponse
 ): Promise<void> {
   try {
-    const syncTitle = process.env.ODOO_SYNC_UPDATE_TITLE === "true"
-    const syncDescription = process.env.ODOO_SYNC_UPDATE_DESCRIPTION === "true"
     const { limit = 100, dryRun = true } = req.body as {
       limit?: number
       dryRun?: boolean
@@ -79,26 +77,12 @@ export async function POST(
           )
 
           if (existingProduct) {
-            // Update only Odoo-linked metadata by default.
-            // Keep amount/specifications/features managed separately in backend admin.
-            const updatePayload: Record<string, any> = {
-              metadata: {
-                ...(existingProduct.metadata || {}),
-                ...medusaProduct.metadata,
-                odoo_stock: Math.floor(odooProduct.qty_available || 0),
-                synced_at: new Date().toISOString(),
-              },
-            }
-
-            if (syncTitle) {
-              updatePayload.title = medusaProduct.title
-            }
-
-            if (syncDescription) {
-              updatePayload.description = medusaProduct.description
-            }
-
-            await productService.updateProducts(existingProduct.id, updatePayload)
+            // Update existing product
+            await productService.updateProducts(existingProduct.id, {
+              title: medusaProduct.title,
+              description: medusaProduct.description,
+              metadata: medusaProduct.metadata,
+            })
             result.updated++
           } else {
             // Create new product
