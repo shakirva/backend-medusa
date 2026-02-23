@@ -8,9 +8,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         const limit = parseInt(req.query.limit as string) || 20
         const offset = parseInt(req.query.offset as string) || 0
 
-        // For store API, only return published posts
+        // Build filters
+        const filters: any = { is_published: true }
+        if (req.query.category) {
+            filters.category = req.query.category
+        }
+        if (req.query.is_featured !== undefined) {
+            filters.is_featured = req.query.is_featured === 'true'
+        }
+
         const [posts, count] = await blogService.listAndCountBlogPosts(
-            { is_published: true },
+            filters,
             {
                 skip: offset,
                 take: limit,

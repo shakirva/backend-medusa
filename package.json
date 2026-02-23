@@ -26,6 +26,7 @@
     "prod:start": "cd .medusa/server && ./node_modules/.bin/medusa start",
     "db:migrate": "npx medusa db:migrate",
     "seed": "medusa exec ./src/scripts/seed.ts",
+    "seed:blog": "medusa exec ./src/scripts/seed-blog.ts",
     "publish:products": "medusa exec ./src/scripts/publish-products.ts",
     "create:pubkey": "medusa exec ./src/scripts/create-publishable-key.ts",
     "seed:hero-banner": "medusa exec ./src/scripts/create-sample-hero-banner.ts",

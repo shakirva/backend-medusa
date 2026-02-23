@@ -1,8 +1,8 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk"
-import { TagSolid, DocumentTextSolid, PhotoSolid } from "@medusajs/icons"
+import { DocumentTextSolid, PhotoSolid } from "@medusajs/icons"
 import { Container, Heading, Button, Input, Text, clx, Badge, Switch } from "@medusajs/ui"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { sdk } from "../../lib/sdk"
 
 type BlogPost = {
@@ -13,6 +13,10 @@ type BlogPost = {
     excerpt?: string
     author?: string
     image_url?: string
+    category?: string
+    reading_time?: string
+    likes_count?: number
+    is_featured: boolean
     is_published: boolean
     published_at?: string
     created_at: string
@@ -53,11 +57,19 @@ const BlogPostCard = ({
                         <PhotoSolid className="w-12 h-12" />
                     </div>
                 )}
-                <div className="absolute top-3 right-3">
+                <div className="absolute top-3 right-3 flex flex-col gap-1 items-end">
                     <Badge color={post.is_published ? "green" : "grey"} size="small">
                         {post.is_published ? "Published" : "Draft"}
                     </Badge>
+                    {post.is_featured && (
+                        <Badge color="blue" size="small">Featured</Badge>
+                    )}
                 </div>
+                {post.category && (
+                    <div className="absolute bottom-3 left-3">
+                        <Badge color="purple" size="small">{post.category}</Badge>
+                    </div>
+                )}
             </div>
 
             {/* Info */}
@@ -67,8 +79,14 @@ const BlogPostCard = ({
                     <p className="text-sm text-gray-500 line-clamp-2 mb-3">{post.excerpt}</p>
                 )}
                 <div className="mt-auto pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400">
-                    <span>{post.author || "Admin"}</span>
-                    <span>{new Date(post.published_at || post.created_at).toLocaleDateString()}</span>
+                    <div className="flex flex-col">
+                        <span>{post.author || "Admin"}</span>
+                        {post.reading_time && <span>{post.reading_time}</span>}
+                    </div>
+                    <div className="text-right">
+                        <span>{new Date(post.published_at || post.created_at).toLocaleDateString()}</span>
+                        {post.likes_count !== undefined && <div className="mt-1">❤️ {post.likes_count}</div>}
+                    </div>
                 </div>
             </div>
 
@@ -110,16 +128,47 @@ const BlogPostFormDrawer = ({
     post: BlogPost | null
     onSave: (data: any) => void
 }) => {
-    const [title, setTitle] = useState(post?.title || "")
-    const [slug, setSlug] = useState(post?.slug || "")
-    const [excerpt, setExcerpt] = useState(post?.excerpt || "")
-    const [content, setContent] = useState(post?.content || "")
-    const [author, setAuthor] = useState(post?.author || "")
+    const [title, setTitle] = useState("")
+    const [slug, setSlug] = useState("")
+    const [excerpt, setExcerpt] = useState("")
+    const [content, setContent] = useState("")
+    const [author, setAuthor] = useState("")
+    const [category, setCategory] = useState("")
+    const [readingTime, setReadingTime] = useState("")
+    const [isFeatured, setIsFeatured] = useState(false)
     const [imageFile, setImageFile] = useState<File | null>(null)
-    const [imagePreview, setImagePreview] = useState(post?.image_url || "")
-    const [isPublished, setIsPublished] = useState(post?.is_published ?? false)
+    const [imagePreview, setImagePreview] = useState("")
+    const [isPublished, setIsPublished] = useState(false)
     const [isLoading, setIsLoading] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
+
+    // Sync state when 'post' changes (crucial for edit mode)
+    useEffect(() => {
+        if (post) {
+            setTitle(post.title || "")
+            setSlug(post.slug || "")
+            setExcerpt(post.excerpt || "")
+            setContent(post.content || "")
+            setAuthor(post.author || "")
+            setCategory(post.category || "")
+            setReadingTime(post.reading_time || "")
+            setIsFeatured(post.is_featured || false)
+            setImagePreview(post.image_url || "")
+            setIsPublished(post.is_published ?? false)
+        } else {
+            setTitle("")
+            setSlug("")
+            setExcerpt("")
+            setContent("")
+            setAuthor("")
+            setCategory("")
+            setReadingTime("")
+            setIsFeatured(false)
+            setImagePreview("")
+            setIsPublished(false)
+        }
+        setImageFile(null)
+    }, [post, isOpen])
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
@@ -155,10 +204,13 @@ const BlogPostFormDrawer = ({
             onSave({
                 id: post?.id,
                 title,
-                slug: slug || undefined, // backend handles slug generation if missing
+                slug: slug || undefined,
                 excerpt,
                 content,
                 author,
+                category,
+                reading_time: readingTime,
+                is_featured: isFeatured,
                 image_url: imageUrl,
                 is_published: isPublished
             })
@@ -175,14 +227,14 @@ const BlogPostFormDrawer = ({
         <div className="fixed inset-0 z-[100] overflow-y-auto">
             <div className="fixed inset-0 bg-black/60 transition-opacity" onClick={onClose} />
 
-            <div className="flex min-h-full items-center justify-center p-4">
-                <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl transform transition-all">
+            <div className="flex min-h-full items-center justify-center p-4 text-left">
+                <div className="relative bg-[#111318] rounded-2xl shadow-2xl w-full max-w-2xl transform transition-all border border-gray-800">
                     {/* Header */}
-                    <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-2xl flex items-center justify-between">
-                        <h2 className="text-xl font-semibold text-gray-900">
+                    <div className="px-6 py-4 border-b border-gray-800 bg-[#1a1d23] rounded-t-2xl flex items-center justify-between">
+                        <h2 className="text-xl font-semibold text-white">
                             {post ? "Edit Blog Post" : "Create Blog Post"}
                         </h2>
-                        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+                        <button onClick={onClose} className="text-gray-400 hover:text-gray-200 transition-colors">
                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                             </svg>
@@ -193,17 +245,17 @@ const BlogPostFormDrawer = ({
                     <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
                         {/* Image Section */}
                         <div className="space-y-2">
-                            <label className="block text-sm font-medium text-gray-700">Cover Image</label>
+                            <label className="block text-sm font-medium text-gray-300">Cover Image</label>
                             <div
                                 onClick={() => fileInputRef.current?.click()}
-                                className="w-full h-48 rounded-xl bg-gray-50 flex items-center justify-center overflow-hidden border-2 border-dashed border-gray-300 cursor-pointer group hover:border-blue-400 transition-colors"
+                                className="w-full h-48 rounded-xl bg-[#0d0f12] flex items-center justify-center overflow-hidden border-2 border-dashed border-gray-700 cursor-pointer group hover:border-[#E63946] transition-colors"
                             >
                                 {imagePreview ? (
                                     <img src={imagePreview} alt="Preview" className="w-full h-full object-cover" />
                                 ) : (
                                     <div className="text-center">
-                                        <PhotoSolid className="w-10 h-10 text-gray-400 mx-auto" />
-                                        <span className="text-sm text-gray-500">Click to upload image</span>
+                                        <PhotoSolid className="w-10 h-10 text-gray-500 mx-auto" />
+                                        <span className="text-sm text-gray-400">Click to upload image</span>
                                     </div>
                                 )}
                                 <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
@@ -212,55 +264,75 @@ const BlogPostFormDrawer = ({
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700">Title*</label>
-                                <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Article title" />
+                                <label className="block text-sm font-medium text-gray-300">Title*</label>
+                                <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Article title" className="bg-[#1a1d23] border-gray-700 text-white" />
                             </div>
                             <div className="space-y-2">
-                                <label className="block text-sm font-medium text-gray-700">Author</label>
-                                <Input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Author name" />
+                                <label className="block text-sm font-medium text-gray-300">Author</label>
+                                <Input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Author name" className="bg-[#1a1d23] border-gray-700 text-white" />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="block text-sm font-medium text-gray-300">Category</label>
+                                <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Buying Guide, Technology" className="bg-[#1a1d23] border-gray-700 text-white" />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-sm font-medium text-gray-300">Reading Time</label>
+                                <Input value={readingTime} onChange={(e) => setReadingTime(e.target.value)} placeholder="e.g. 5 min to read" className="bg-[#1a1d23] border-gray-700 text-white" />
                             </div>
                         </div>
 
                         <div className="space-y-2">
-                            <label className="block text-sm font-medium text-gray-700">Slug (URL friendly)</label>
-                            <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="leave-blank-to-auto-generate" />
+                            <label className="block text-sm font-medium text-gray-300">Slug (URL friendly)</label>
+                            <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="leave-blank-to-auto-generate" className="bg-[#1a1d23] border-gray-700 text-white" />
                         </div>
 
                         <div className="space-y-2">
-                            <label className="block text-sm font-medium text-gray-700">Excerpt</label>
+                            <label className="block text-sm font-medium text-gray-300">Excerpt</label>
                             <textarea
                                 value={excerpt}
                                 onChange={(e) => setExcerpt(e.target.value)}
                                 rows={2}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                className="w-full px-3 py-2 bg-[#1a1d23] border border-gray-700 rounded-lg text-sm text-white focus:ring-1 focus:ring-[#E63946] focus:border-[#E63946] outline-none"
                                 placeholder="A short summary of the post..."
                             />
                         </div>
 
                         <div className="space-y-2">
-                            <label className="block text-sm font-medium text-gray-700">Content (Markdown supported)</label>
+                            <label className="block text-sm font-medium text-gray-300">Content (Markdown supported)</label>
                             <textarea
                                 value={content}
                                 onChange={(e) => setContent(e.target.value)}
                                 rows={8}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono"
+                                className="w-full px-3 py-2 bg-[#1a1d23] border border-gray-700 rounded-lg text-sm font-mono text-white focus:ring-1 focus:ring-[#E63946] focus:border-[#E63946] outline-none"
                                 placeholder="Write your article here..."
                             />
                         </div>
 
-                        <div className="flex items-center justify-between bg-gray-50 p-4 rounded-xl">
-                            <div>
-                                <span className="text-sm font-medium text-gray-700 block">Published</span>
-                                <span className="text-xs text-gray-500">Make this post visible on the store</span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="flex items-center justify-between bg-[#1a1d23] p-4 rounded-xl border border-gray-800">
+                                <div>
+                                    <span className="text-sm font-medium text-white block">Published</span>
+                                    <span className="text-xs text-gray-500">Visible on store</span>
+                                </div>
+                                <Switch checked={isPublished} onCheckedChange={setIsPublished} />
                             </div>
-                            <Switch checked={isPublished} onCheckedChange={setIsPublished} />
+                            <div className="flex items-center justify-between bg-[#1a1d23] p-4 rounded-xl border border-gray-800">
+                                <div>
+                                    <span className="text-sm font-medium text-white block">Featured</span>
+                                    <span className="text-xs text-gray-500">Show in hero section</span>
+                                </div>
+                                <Switch checked={isFeatured} onCheckedChange={setIsFeatured} />
+                            </div>
                         </div>
                     </div>
 
                     {/* Footer */}
-                    <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl flex justify-end gap-3">
-                        <Button variant="secondary" onClick={onClose}>Cancel</Button>
-                        <Button onClick={handleSubmit} disabled={!title || isLoading}>
+                    <div className="px-6 py-4 border-t border-gray-800 bg-[#1a1d23] rounded-b-2xl flex justify-end gap-3">
+                        <Button variant="secondary" onClick={onClose} className="bg-transparent border-gray-700 text-white hover:bg-gray-800">Cancel</Button>
+                        <Button onClick={handleSubmit} disabled={!title || isLoading} className="bg-[#E63946] hover:bg-[#C62828] text-white border-none shadow-lg shadow-red-900/20">
                             {isLoading ? "Saving..." : (post ? "Update Post" : "Create Post")}
                         </Button>
                     </div>

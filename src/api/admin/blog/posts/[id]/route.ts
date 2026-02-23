@@ -20,12 +20,32 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         const { id } = req.params
         const body = req.body as any
 
-        const updated = await blogService.updateBlogPosts({
-            id,
-            ...body
+        // Basic sanitize/mapping of fields
+        const updateData: any = { id }
+
+        const allowedFields = [
+            "title", "slug", "content", "excerpt", "author",
+            "image_url", "is_published", "category",
+            "reading_time", "likes_count", "is_featured",
+            "meta_title", "meta_description", "keywords"
+        ]
+
+        allowedFields.forEach(field => {
+            if (body[field] !== undefined) {
+                updateData[field] = body[field]
+            }
         })
 
-        res.json({ post: updated })
+        // Handle published_at logic
+        if (body.is_published === true) {
+            updateData.published_at = body.published_at || new Date()
+        } else if (body.is_published === false) {
+            updateData.published_at = null
+        }
+
+        const updated = await blogService.updateBlogPosts([updateData])
+
+        res.json({ post: updated[0] })
     } catch (e: any) {
         console.error('Admin blog post update error:', e)
         res.status(500).json({ message: e?.message || 'Failed to update blog post' })
