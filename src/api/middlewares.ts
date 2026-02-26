@@ -102,6 +102,17 @@ export default defineMiddlewares({
       matcher: "/app/*",
       middlewares: [injectBranding],
     },
+    // Customer authentication for store customer routes (required for /store/customers/me)
+    {
+      matcher: "/store/customers/me*",
+      middlewares: [authenticate("customer", ["session", "bearer"])],
+    },
+    // Customer creation after registration - needs allowUnregistered since customer profile doesn't exist yet
+    {
+      matcher: "/store/customers",
+      method: "POST",
+      middlewares: [authenticate("customer", ["session", "bearer"], { allowUnregistered: true })],
+    },
     // Customer authentication for custom store routes
     {
       matcher: "/store/wishlist*",
