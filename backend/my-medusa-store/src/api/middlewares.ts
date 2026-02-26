@@ -1,4 +1,4 @@
-import { defineMiddlewares } from "@medusajs/framework/http"
+import { defineMiddlewares, authenticate } from "@medusajs/framework/http"
 import type { MedusaRequest, MedusaResponse, MedusaNextFunction } from "@medusajs/framework/http"
 import Busboy from "busboy"
 import path from "path"
@@ -101,6 +101,26 @@ export default defineMiddlewares({
       // Inject marqasouq branding into admin pages
       matcher: "/app/*",
       middlewares: [injectBranding],
+    },
+    // Customer authentication for store customer routes (required for /store/customers/me)
+    {
+      matcher: "/store/customers/me*",
+      middlewares: [authenticate("customer", ["session", "bearer"])],
+    },
+    // Customer creation after registration - needs allowUnregistered since customer profile doesn't exist yet
+    {
+      matcher: "/store/customers",
+      method: "POST",
+      middlewares: [authenticate("customer", ["session", "bearer"], { allowUnregistered: true })],
+    },
+    // Customer authentication for custom store routes
+    {
+      matcher: "/store/wishlist*",
+      middlewares: [authenticate("customer", ["session", "bearer"])],
+    },
+    {
+      matcher: "/store/products/*/reviews",
+      middlewares: [authenticate("customer", ["session", "bearer"], { allowUnauthenticated: true })],
     },
   ],
 })
