@@ -2,7 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { BRAND_MODULE } from "../../../../../modules/brands"
 import BrandService from "../../../../../modules/brands/service"
 
-export const AUTHENTICATE = true
+export const AUTHENTICATE = false
 
 /**
  * POST /admin/brands/:id/products
