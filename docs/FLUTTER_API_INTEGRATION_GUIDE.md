@@ -76,33 +76,28 @@ curl -X GET "https://admin.markasouqs.com/store/product-categories" \
 
 ## 2. Authentication APIs
 
-### 2.1 Customer Registration
+### ⚠️ CRITICAL: MedusaJS 2.x Authentication Flow
+
+MedusaJS 2.x uses a **3-step registration process**:
+
+1. **Register** → Creates auth identity, returns a temporary token
+2. **Create Customer Profile** → Links the auth identity to a customer profile  
+3. **Login** → Get a session token for authenticated requests
+
+**Important:** The token from registration is a ONE-TIME token. After creating the customer profile, you MUST login to get a proper session token.
+
+---
+
+### 2.1 Customer Registration (Step 1 of 3)
 
 ```
 POST https://admin.markasouqs.com/auth/customer/emailpass/register
 ```
 
-*Request Body:*
-```json
-{
-  "email": "customer@example.com",
-  "password": "password123",
-  "first_name": "Ahmed",
-  "last_name": "Al-Rashid"
-}
+*Headers:*
 ```
-
-*Response (200):*
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
-
-### 2.2 Customer Login
-
-```
-POST https://admin.markasouqs.com/auth/customer/emailpass
+Content-Type: application/json
+x-publishable-api-key: pk_3971873a84ad4ec5ea711738227a4be2f078a2fd872f40125628afc860b9887b
 ```
 
 *Request Body:*
@@ -120,15 +115,91 @@ POST https://admin.markasouqs.com/auth/customer/emailpass
 }
 ```
 
-### 2.3 Get Logged-in Customer
+---
+
+### 2.2 Create Customer Profile (Step 2 of 3) - REQUIRED AFTER REGISTRATION
+
+```
+POST https://admin.markasouqs.com/store/customers
+```
+
+*Headers:*
+```
+Content-Type: application/json
+x-publishable-api-key: pk_3971873a84ad4ec5ea711738227a4be2f078a2fd872f40125628afc860b9887b
+Authorization: Bearer <token_from_registration>
+```
+
+*Request Body:*
+```json
+{
+  "email": "customer@example.com",
+  "first_name": "Ahmed",
+  "last_name": "Al-Rashid"
+}
+```
+
+*Response (200):*
+```json
+{
+  "customer": {
+    "id": "cus_01ABC123",
+    "email": "customer@example.com",
+    "first_name": "Ahmed",
+    "last_name": "Al-Rashid",
+    "has_account": true,
+    "created_at": "2026-02-27T10:30:00.000Z"
+  }
+}
+```
+
+---
+
+### 2.3 Customer Login (Step 3 of 3 OR for returning users)
+
+```
+POST https://admin.markasouqs.com/auth/customer/emailpass
+```
+
+*Headers:*
+```
+Content-Type: application/json
+x-publishable-api-key: pk_3971873a84ad4ec5ea711738227a4be2f078a2fd872f40125628afc860b9887b
+```
+
+*Request Body:*
+```json
+{
+  "email": "customer@example.com",
+  "password": "password123"
+}
+```
+
+*Response (200):*
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**⚠️ IMPORTANT:** Use THIS token (from login) for all authenticated requests like wishlist, addresses, orders, etc.
+
+---
+
+### 2.4 Get Logged-in Customer
 
 ```
 GET https://admin.markasouqs.com/store/customers/me
 ```
 
-*Headers:* Requires `Authorization: Bearer {token}`
+*Headers:*
+```
+Content-Type: application/json
+x-publishable-api-key: pk_3971873a84ad4ec5ea711738227a4be2f078a2fd872f40125628afc860b9887b
+Authorization: Bearer <token_from_login>
+```
 
-*Response:*
+*Response (200):*
 ```json
 {
   "customer": {
@@ -137,12 +208,112 @@ GET https://admin.markasouqs.com/store/customers/me
     "first_name": "Ahmed",
     "last_name": "Al-Rashid",
     "phone": "+965-12345678",
+    "has_account": true,
     "created_at": "2026-01-15T10:30:00.000Z"
   }
 }
 ```
 
-### 2.4 Update Customer Profile
+---
+
+### Complete Registration Flow (Flutter Code Example)
+
+```dart
+class AuthService {
+  static const String baseUrl = 'https://admin.markasouqs.com';
+  static const String publishableKey = 'pk_3971873a84ad4ec5ea711738227a4be2f078a2fd872f40125628afc860b9887b';
+
+  /// Complete registration flow - call this for new user signup
+  Future<String?> registerNewCustomer({
+    required String email,
+    required String password,
+    required String firstName,
+    required String lastName,
+  }) async {
+    final headers = {
+      'Content-Type': 'application/json',
+      'x-publishable-api-key': publishableKey,
+    };
+
+    // Step 1: Register auth identity
+    final registerResponse = await http.post(
+      Uri.parse('$baseUrl/auth/customer/emailpass/register'),
+      headers: headers,
+      body: jsonEncode({
+        'email': email,
+        'password': password,
+      }),
+    );
+
+    if (registerResponse.statusCode != 200) {
+      throw Exception('Registration failed: ${registerResponse.body}');
+    }
+
+    final registerData = jsonDecode(registerResponse.body);
+    final registrationToken = registerData['token'];
+
+    // Step 2: Create customer profile (REQUIRED!)
+    final createCustomerResponse = await http.post(
+      Uri.parse('$baseUrl/store/customers'),
+      headers: {
+        ...headers,
+        'Authorization': 'Bearer $registrationToken',
+      },
+      body: jsonEncode({
+        'email': email,
+        'first_name': firstName,
+        'last_name': lastName,
+      }),
+    );
+
+    if (createCustomerResponse.statusCode != 200) {
+      throw Exception('Failed to create customer profile: ${createCustomerResponse.body}');
+    }
+
+    // Step 3: Login to get session token
+    final loginResponse = await http.post(
+      Uri.parse('$baseUrl/auth/customer/emailpass'),
+      headers: headers,
+      body: jsonEncode({
+        'email': email,
+        'password': password,
+      }),
+    );
+
+    if (loginResponse.statusCode != 200) {
+      throw Exception('Login failed: ${loginResponse.body}');
+    }
+
+    final loginData = jsonDecode(loginResponse.body);
+    return loginData['token']; // THIS is the token to use for authenticated requests
+  }
+
+  /// Login for existing users
+  Future<String?> login(String email, String password) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/customer/emailpass'),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-publishable-api-key': publishableKey,
+      },
+      body: jsonEncode({
+        'email': email,
+        'password': password,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return data['token'];
+    }
+    return null;
+  }
+}
+```
+
+---
+
+### 2.5 Update Customer Profile
 
 ```
 POST https://admin.markasouqs.com/store/customers/me
