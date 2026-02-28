@@ -1,8 +1,3 @@
-# MarqaSouq - Complete Flutter API Integration Guide
-
-*Version:* 2.1.0  
-*Last Updated:* February 24, 2026  
-*Base URL:* `https://admin.markasouqs.com` (Production) | `http://localhost:9000` (Development)
 
 ---
 

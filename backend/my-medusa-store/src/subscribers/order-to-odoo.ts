@@ -12,9 +12,9 @@ import axios from "axios"
  */
 
 const ODOO_URL = process.env.ODOO_URL || "https://oskarllc-new-27289548.dev.odoo.com"
-const ODOO_DB = process.env.ODOO_DB_NAME || "oskarllc-new-27289548"
+const ODOO_DB = process.env.ODOO_DB_NAME || "oskarllc-stage-27028831"
 const ODOO_USER = process.env.ODOO_USERNAME || "SYG"
-const ODOO_PASS = process.env.ODOO_PASSWORD || "S123456"
+const ODOO_API_KEY = process.env.ODOO_API_KEY || ""
 
 async function authenticateOdoo(): Promise<number | null> {
   try {
@@ -24,7 +24,7 @@ async function authenticateOdoo(): Promise<number | null> {
       params: {
         service: "common",
         method: "authenticate",
-        args: [ODOO_DB, ODOO_USER, ODOO_PASS, {}]
+        args: [ODOO_DB, ODOO_USER, ODOO_API_KEY, {}]
       },
       id: 1
     })
@@ -47,7 +47,7 @@ async function findOdooProductBySku(uid: number, sku: string): Promise<number | 
       params: {
         service: "object",
         method: "execute_kw",
-        args: [ODOO_DB, uid, ODOO_PASS, "product.product", "search", [[["default_code", "=", sku]]]]
+        args: [ODOO_DB, uid, ODOO_API_KEY, "product.product", "search", [[["default_code", "=", sku]]]]
       },
       id: 10
     })
@@ -85,7 +85,7 @@ async function createOdooOrder(uid: number, orderData: any, logger: any): Promis
       params: {
         service: "object",
         method: "execute_kw",
-        args: [ODOO_DB, uid, ODOO_PASS, "res.partner", "search", [[["email", "=", customerEmail]]]]
+        args: [ODOO_DB, uid, ODOO_API_KEY, "res.partner", "search", [[["email", "=", customerEmail]]]]
       },
       id: 2
     })
@@ -101,7 +101,7 @@ async function createOdooOrder(uid: number, orderData: any, logger: any): Promis
         params: {
           service: "object",
           method: "execute_kw",
-          args: [ODOO_DB, uid, ODOO_PASS, "res.partner", "create", [{
+          args: [ODOO_DB, uid, ODOO_API_KEY, "res.partner", "create", [{
             name: customerName,
             email: customerEmail,
             phone: orderData.shipping_address?.phone || "",
@@ -149,7 +149,7 @@ async function createOdooOrder(uid: number, orderData: any, logger: any): Promis
       params: {
         service: "object",
         method: "execute_kw",
-        args: [ODOO_DB, uid, ODOO_PASS, "sale.order", "create", [{
+        args: [ODOO_DB, uid, ODOO_API_KEY, "sale.order", "create", [{
           partner_id: partnerId,
           client_order_ref: orderData.id,
           note: `Order from Marqa Souq - ${orderData.id}`,
@@ -175,7 +175,7 @@ async function createOdooOrder(uid: number, orderData: any, logger: any): Promis
         params: {
           service: "object",
           method: "execute_kw",
-          args: [ODOO_DB, uid, ODOO_PASS, "sale.order", "action_confirm", [[odooOrderId]]]
+          args: [ODOO_DB, uid, ODOO_API_KEY, "sale.order", "action_confirm", [[odooOrderId]]]
         },
         id: 5
       })
