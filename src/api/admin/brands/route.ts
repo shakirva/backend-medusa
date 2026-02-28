@@ -53,6 +53,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       logo_url: logoUrl,
       banner_url: bannerUrl,
       is_active: body.is_active ?? true,
+      is_special: body.is_special ?? false,
       display_order: body.display_order ?? 0,
     }])
 

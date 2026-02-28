@@ -1,5 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { MEDIA_MODULE } from "../../../../modules/media"
+import { BRAND_MODULE } from "../../../../modules/brands"
+import BrandService from "../../../../modules/brands/service"
 
 export const AUTHENTICATE = false
 
@@ -14,7 +16,7 @@ export const AUTHENTICATE = false
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   try {
     const mediaService = req.scope.resolve(MEDIA_MODULE) as any
-    
+
     const limit = parseInt(req.query.limit as string) || 10
     const offset = parseInt(req.query.offset as string) || 0
     const featured = req.query.featured === 'true'
@@ -26,10 +28,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     })
 
     // Filter for video mime types on the application side
-    let items = (allItems || []).filter((m: any) => 
+    let items = (allItems || []).filter((m: any) =>
       m.mime_type && m.mime_type.startsWith('video')
     )
-    
+
     if (featured) {
       items = items.filter((m: any) => m.is_featured === true)
     }
@@ -37,6 +39,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     // Apply pagination
     const count = items.length
     items = items.slice(offset, offset + limit)
+
+    // Build brand logo map keyed by brand name
+    const brandService = req.scope.resolve<BrandService>(BRAND_MODULE)
+    const [allBrands] = await brandService.listAndCountBrands({}, { take: 200 })
+    const brandLogoMap = new Map<string, string | null>()
+    for (const b of allBrands) {
+      brandLogoMap.set(b.name, b.logo_url ?? null)
+    }
 
     const getOrigin = () => {
       const fromEnv = process.env.MEDUSA_URL
@@ -64,6 +74,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       thumbnail: makeAbsolute(m.thumbnail_url || null),
       thumbnail_url: makeAbsolute(m.thumbnail_url || null),
       brand: m.brand || 'Markasouq',
+      brand_logo_url: m.brand ? (brandLogoMap.get(m.brand) ?? null) : null,
       views: m.views || 0,
       display_order: m.display_order || 0,
       is_featured: m.is_featured || false,

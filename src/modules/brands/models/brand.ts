@@ -12,6 +12,7 @@ const Brand = model.define("brand", {
   logo_url: model.text().nullable(),
   banner_url: model.text().nullable(),
   is_active: model.boolean().default(true),
+  is_special: model.boolean().default(false),
   meta_title: model.text().nullable(),
   meta_description: model.text().nullable(),
   display_order: model.number().default(0),

@@ -1,5 +1,7 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { MEDIA_MODULE } from "../../../modules/media"
+import { BRAND_MODULE } from "../../../modules/brands"
+import BrandService from "../../../modules/brands/service"
 
 export const AUTHENTICATE = false
 
@@ -17,9 +19,17 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       items = rows || []
       count = c || 0
     } else {
-      const [rows, c] = await mediaService.listAndCountMedia({ }, { take: 200 })
+      const [rows, c] = await mediaService.listAndCountMedia({}, { take: 200 })
       items = rows || []
       count = c || 0
+    }
+
+    // Build a brand logo map keyed by brand name for O(1) lookup per media item
+    const brandService = req.scope.resolve<BrandService>(BRAND_MODULE)
+    const [allBrands] = await brandService.listAndCountBrands({}, { take: 200 })
+    const brandLogoMap = new Map<string, string | null>()
+    for (const b of allBrands) {
+      brandLogoMap.set(b.name, b.logo_url ?? null)
     }
 
     const getOrigin = () => {
@@ -45,6 +55,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       alt_text: m.alt_text || null,
       thumbnail_url: makeAbsolute(m.thumbnail_url || null),
       brand: m.brand || null,
+      brand_logo_url: m.brand ? (brandLogoMap.get(m.brand) ?? null) : null,
       views: m.views ?? 0,
       display_order: m.display_order ?? 0,
       is_featured: !!m.is_featured,

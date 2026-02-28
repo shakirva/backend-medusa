@@ -17,6 +17,7 @@ type Brand = {
   logo_url?: string
   banner_url?: string
   is_active: boolean
+  is_special: boolean
   created_at: string
 }
 
@@ -414,11 +415,18 @@ const BrandCard = ({
 
       {/* Brand Info */}
       <div className="p-4 border-t border-gray-100">
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex items-start justify-between mb-1 gap-1">
           <h3 className="font-semibold text-gray-900 text-sm truncate">{brand.name}</h3>
-          <Badge color={brand.is_active ? "green" : "grey"} size="small">
-            {brand.is_active ? "Active" : "Inactive"}
-          </Badge>
+          <div className="flex flex-col items-end gap-1 flex-shrink-0">
+            <Badge color={brand.is_active ? "green" : "grey"} size="small">
+              {brand.is_active ? "Active" : "Inactive"}
+            </Badge>
+            {brand.is_special && (
+              <Badge color="orange" size="small">
+                ⭐ Special
+              </Badge>
+            )}
+          </div>
         </div>
         {/* Product count pill */}
         <button
@@ -490,6 +498,7 @@ const BrandFormDrawer = ({
   const [logoFile, setLogoFile] = useState<File | null>(null)
   const [logoPreview, setLogoPreview] = useState(brand?.logo_url || "")
   const [isActive, setIsActive] = useState(brand?.is_active ?? true)
+  const [isSpecial, setIsSpecial] = useState(brand?.is_special ?? false)
   const [isLoading, setIsLoading] = useState(false)
 
   // Reset when brand changes
@@ -499,6 +508,7 @@ const BrandFormDrawer = ({
     setLogoFile(null)
     setLogoPreview(brand?.logo_url || "")
     setIsActive(brand?.is_active ?? true)
+    setIsSpecial(brand?.is_special ?? false)
   }, [brand])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -537,7 +547,7 @@ const BrandFormDrawer = ({
         }
         logoUrl = resolved
       }
-      onSave({ id: brand?.id, name, description, logo_url: logoUrl, is_active: isActive })
+      onSave({ id: brand?.id, name, description, logo_url: logoUrl, is_active: isActive, is_special: isSpecial })
     } catch (error) {
       console.error("Error saving brand:", error)
     } finally {
@@ -638,6 +648,29 @@ const BrandFormDrawer = ({
                   className={clx(
                     "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
                     isActive ? "translate-x-5" : "translate-x-0"
+                  )}
+                />
+              </button>
+            </div>
+
+            {/* Special Brand toggle */}
+            <div className="flex items-center justify-between py-2 px-3 bg-amber-50 rounded-lg border border-amber-100">
+              <div>
+                <span className="text-sm font-medium text-amber-800 block">⭐ Special Brand</span>
+                <span className="text-xs text-amber-600">Show this brand in the frontend Special Explore section</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSpecial(!isSpecial)}
+                className={clx(
+                  "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2",
+                  isSpecial ? "bg-amber-500" : "bg-gray-300"
+                )}
+              >
+                <span
+                  className={clx(
+                    "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                    isSpecial ? "translate-x-5" : "translate-x-0"
                   )}
                 />
               </button>
