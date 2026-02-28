@@ -30,7 +30,7 @@ export default async function orderPlacedHandler({
     // Format order items for email
     const itemsHtml = order.items
       ?.map(
-        (item) =>
+        (item: any) =>
           `<tr>
             <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.title}</td>
             <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">${item.quantity}</td>
@@ -78,17 +78,17 @@ export default async function orderPlacedHandler({
  */
 function formatPrice(amount: number | undefined, currencyCode: string): string {
   if (amount === undefined) return "0.000";
-  
+
   // KWD has 3 decimal places
   const decimals = currencyCode?.toLowerCase() === "kwd" ? 3 : 2;
   const formatted = (amount / Math.pow(10, decimals)).toFixed(decimals);
-  
+
   const currencySymbols: Record<string, string> = {
     kwd: "KD",
     usd: "$",
     eur: "€",
   };
-  
+
   const symbol = currencySymbols[currencyCode?.toLowerCase()] || currencyCode?.toUpperCase();
   return `${symbol} ${formatted}`;
 }

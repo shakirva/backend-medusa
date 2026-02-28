@@ -19,6 +19,39 @@ function hasMetadata(payload: any) {
   return hasTags || hasCollectionId || hasCollectionIds || hasCategories
 }
 
+function normalizeImageFields(payload: any) {
+  if (!payload || typeof payload !== "object") return payload
+
+  const next = { ...payload }
+
+  // Support a few common frontend/admin keys for thumbnail.
+  const thumb = next.thumbnail || next.thumbnail_url || next.temp_image || next.image_url
+  if (thumb && !next.thumbnail) {
+    next.thumbnail = thumb
+  }
+
+  // Normalize images into [{ url: string }]
+  if (Array.isArray(next.images)) {
+    next.images = next.images
+      .map((img: any) => {
+        if (!img) return null
+        if (typeof img === "string") return { url: img }
+        if (typeof img?.url === "string") return { url: img.url }
+        return null
+      })
+      .filter(Boolean)
+  } else if (typeof next.images === "string") {
+    next.images = [{ url: next.images }]
+  }
+
+  // If we have a thumbnail but no images, include it as first image.
+  if (next.thumbnail && (!Array.isArray(next.images) || next.images.length === 0)) {
+    next.images = [{ url: next.thumbnail }]
+  }
+
+  return next
+}
+
 const metadataError = {
   message:
     'Missing required metadata: please include tags OR collection_id/collection_ids OR categories in the product payload.\n' +
@@ -27,7 +60,7 @@ const metadataError = {
 
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   try {
-    const body = req.body as any
+    const body = normalizeImageFields((req.body as any) || {})
     const requireMetadata = process.env.REQUIRE_PRODUCT_METADATA === 'true'
 
     if (requireMetadata && !hasMetadata(body)) {
@@ -58,22 +91,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
 export async function PUT(req: MedusaRequest, res: MedusaResponse) {
   try {
-    const body = req.body as any
+    const body = normalizeImageFields((req.body as any) || {})
     // id may come from query param (e.g., /admin/products?id=prod_...) or body
     const id = (req.query && (req.query.id as string)) || body?.id
     if (!id) return res.status(400).json({ message: 'Missing product id for update' })
 
-    const requireMetadata = process.env.REQUIRE_PRODUCT_METADATA === 'true'
-
-    // If the update payload would remove metadata (or leave it empty), enforce presence
-    if (requireMetadata) {
-      // We require either the incoming payload includes metadata OR that metadata already exists.
-      // To keep this lightweight (avoid an extra DB read in the common case), we primarily enforce
-      // that the update payload includes at least one metadata field when REQUIRE_PRODUCT_METADATA is true.
-      if (!hasMetadata(body)) {
-        return res.status(400).json(metadataError)
-      }
-    }
+    // NOTE: Don't enforce metadata on updates.
+    // Image-only updates (thumbnail/images) and other partial edits must stay allowed.
 
     const productService = req.scope.resolve(Modules.PRODUCT) as any
 

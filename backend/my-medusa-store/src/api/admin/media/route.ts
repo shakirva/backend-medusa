@@ -22,8 +22,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       url: m.url,
       mime_type: m.mime_type || null,
       title: m.title || null,
+      title_ar: m.title_ar || null,
       alt_text: m.alt_text || null,
       thumbnail_url: m.thumbnail_url || null,
+      brand: m.brand || null,
+      views: m.views ?? 0,
+      display_order: m.display_order ?? 0,
+      is_featured: !!m.is_featured,
       metadata: m.metadata || null,
     }))
 
@@ -46,9 +51,14 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     const payload: any = {
       url: body.url,
       title: body.title,
+      title_ar: body.title_ar,
       mime_type: body.mime_type,
       alt_text: body.alt_text,
       thumbnail_url: body.thumbnail_url,
+      brand: body.brand,
+      views: typeof body.views === "number" ? body.views : undefined,
+      display_order: typeof body.display_order === "number" ? body.display_order : undefined,
+      is_featured: typeof body.is_featured === "boolean" ? body.is_featured : undefined,
       metadata: body.metadata,
     }
 
@@ -63,4 +73,3 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
     res.status(500).json({ message: e?.message || 'Failed to create media' })
   }
 }
-

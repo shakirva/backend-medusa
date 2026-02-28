@@ -21,6 +21,11 @@ export default defineConfig({
   },
 
   admin: {
+    vite: () => ({
+      server: {
+        allowedHosts: ["admin.markasouqs.com", "localhost", "127.0.0.1"],
+      },
+    }),
     path: "/app",
   },
 
@@ -37,16 +42,16 @@ export default defineConfig({
           // Google OAuth - only enabled if credentials are set
           ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
             ? [
-                {
-                  resolve: "@medusajs/auth-google",
-                  id: "google",
-                  options: {
-                    clientId: process.env.GOOGLE_CLIENT_ID,
-                    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-                    callbackUrl: process.env.GOOGLE_CALLBACK_URL || "http://localhost:9000/auth/customer/google/callback",
-                  },
+              {
+                resolve: "@medusajs/auth-google",
+                id: "google",
+                options: {
+                  clientId: process.env.GOOGLE_CLIENT_ID,
+                  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+                  callbackUrl: process.env.GOOGLE_CALLBACK_URL || "http://localhost:9000/auth/customer/google/callback",
                 },
-              ]
+              },
+            ]
             : []),
         ],
       },
@@ -58,6 +63,7 @@ export default defineConfig({
     media: { resolve: "./src/modules/media" },
     sellers: { resolve: "./src/modules/sellers" },
     warranty: { resolve: "./src/modules/warranty" },
+    blog: { resolve: "./src/modules/blog" },
 
     // Notification module for email notifications
     notification: {
@@ -67,16 +73,16 @@ export default defineConfig({
           // SendGrid for production emails
           ...(process.env.SENDGRID_API_KEY
             ? [
-                {
-                  resolve: "@medusajs/notification-sendgrid",
-                  id: "sendgrid",
-                  options: {
-                    channels: ["email"],
-                    api_key: process.env.SENDGRID_API_KEY,
-                    from: process.env.SENDGRID_FROM || "noreply@markasouq.com",
-                  },
+              {
+                resolve: "@medusajs/notification-sendgrid",
+                id: "sendgrid",
+                options: {
+                  channels: ["email"],
+                  api_key: process.env.SENDGRID_API_KEY,
+                  from: process.env.SENDGRID_FROM || "noreply@markasouq.com",
                 },
-              ]
+              },
+            ]
             : []),
           // Local notification provider (logs to console in development)
           {

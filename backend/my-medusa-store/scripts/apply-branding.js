@@ -12,10 +12,15 @@ const filesToCopy = ['index.html', 'index.css'];
 
 console.log('📦 Applying marqasouq branding to admin...');
 
+if (!fs.existsSync(destDir)) {
+  fs.mkdirSync(destDir, { recursive: true });
+  console.log(`  📂 Created directory: ${destDir}`);
+}
+
 filesToCopy.forEach(file => {
   const srcPath = path.join(srcDir, file);
   const destPath = path.join(destDir, file);
-  
+
   if (fs.existsSync(srcPath)) {
     try {
       fs.copyFileSync(srcPath, destPath);

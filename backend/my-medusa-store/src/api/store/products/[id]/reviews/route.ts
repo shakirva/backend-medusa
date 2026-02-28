@@ -1,4 +1,4 @@
-import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { MedusaRequest, MedusaResponse, AuthenticatedMedusaRequest } from "@medusajs/framework/http"
 import { REVIEW_MODULE } from "../../../../../modules/reviews"
 import ReviewService from "../../../../../modules/reviews/service"
 
@@ -13,10 +13,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 // Auth required: create a review for a product
 export const AUTHENTICATE = true
 
-export async function POST(req: MedusaRequest, res: MedusaResponse) {
+export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
   const reviewService = req.scope.resolve<ReviewService>(REVIEW_MODULE)
   const product_id = req.params.id
-  const customer_id = (req as any).auth_customer_id || (req as any).customer_id
+  // MedusaJS 2.x uses auth_context.actor_id for authenticated customer
+  const customer_id = req.auth_context?.actor_id
   if (!customer_id) {
     return res.status(401).json({ message: "Unauthenticated" })
   }
