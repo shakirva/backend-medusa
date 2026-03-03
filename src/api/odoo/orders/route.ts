@@ -28,23 +28,22 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     let whereClause = "WHERE 1=1";
     const params: any[] = [];
-    let paramIndex = 1;
 
     // Filter by status
     if (status) {
       const statuses = status.split(",");
-      whereClause += ` AND o.status IN (${statuses.map(() => `$${paramIndex++}`).join(",")})`;
+      whereClause += ` AND o.status IN (${statuses.map(() => `?`).join(",")})`;
       params.push(...statuses);
     }
 
     // Filter by date range
     if (date_from) {
-      whereClause += ` AND o.created_at >= $${paramIndex++}`;
+      whereClause += ` AND o.created_at >= ?`;
       params.push(date_from);
     }
 
     if (date_to) {
-      whereClause += ` AND o.created_at <= $${paramIndex++}`;
+      whereClause += ` AND o.created_at <= ?`;
       params.push(date_to);
     }
 
@@ -75,27 +74,27 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
        LEFT JOIN customer c ON o.customer_id = c.id
        ${whereClause}
        ORDER BY o.created_at DESC
-       LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+       LIMIT ? OFFSET ?`,
       [...params, parseInt(limit as string), parseInt(offset as string)]
     );
 
     // Get order items for each order
     const orders = await Promise.all(
       ordersResult.rows.map(async (order: any) => {
-        // Get line items
+        // Get line items (MedusaJS 2.x: order_item links order to order_line_item)
         const itemsResult = await pgConnection.raw(
           `SELECT 
             li.id,
             li.title,
-            li.quantity,
+            oi.quantity,
             li.unit_price,
             li.variant_id,
             li.product_id,
-            pv.sku,
-            pv.title as variant_title
-           FROM order_line_item li
-           LEFT JOIN product_variant pv ON li.variant_id = pv.id
-           WHERE li.order_id = $1`,
+            li.variant_sku as sku,
+            li.variant_title
+           FROM order_item oi
+           JOIN order_line_item li ON oi.item_id = li.id
+           WHERE oi.order_id = ?`,
           [order.id]
         );
 
@@ -112,7 +111,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             a.country_code
            FROM order_address a
            JOIN "order" o ON o.shipping_address_id = a.id
-           WHERE o.id = $1`,
+           WHERE o.id = ?`,
           [order.id]
         );
 

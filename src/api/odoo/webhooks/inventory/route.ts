@@ -75,7 +75,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
           il.location_id
          FROM inventory_item ii
          LEFT JOIN inventory_level il ON il.inventory_item_id = ii.id
-         WHERE ii.sku = $1`,
+         WHERE ii.sku = ?`,
         [sku]
       );
 
@@ -85,7 +85,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         
         await pgConnection.raw(
           `INSERT INTO inventory_item (id, sku, title, created_at, updated_at)
-           VALUES ($1, $2, $3, NOW(), NOW())`,
+           VALUES (?, ?, ?, NOW(), NOW())`,
           [newItemId, sku, sku]
         );
 
@@ -99,7 +99,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
           await pgConnection.raw(
             `INSERT INTO inventory_level 
              (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity, incoming_quantity, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, 0, 0, NOW(), NOW())`,
+             VALUES (?, ?, ?, ?, 0, 0, NOW(), NOW())`,
             [newLevelId, newItemId, locationId, quantity]
           );
 
@@ -138,8 +138,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         // Update existing inventory level
         await pgConnection.raw(
           `UPDATE inventory_level 
-           SET stocked_quantity = $1, updated_at = NOW() 
-           WHERE id = $2`,
+           SET stocked_quantity = ?, updated_at = NOW() 
+           WHERE id = ?`,
           [newQuantity, inventoryItem.level_id]
         );
       } else {
@@ -153,7 +153,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
           await pgConnection.raw(
             `INSERT INTO inventory_level 
              (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity, incoming_quantity, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, 0, 0, NOW(), NOW())`,
+             VALUES (?, ?, ?, ?, 0, 0, NOW(), NOW())`,
             [newLevelId, inventoryItem.inventory_item_id, locationId, newQuantity]
           );
         }

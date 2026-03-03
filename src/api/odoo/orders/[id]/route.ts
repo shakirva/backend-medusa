@@ -29,8 +29,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         c.phone
        FROM "order" o
        LEFT JOIN customer c ON o.customer_id = c.id
-       WHERE o.id = $1 OR o.display_id::text = $1`,
-      [id]
+       WHERE o.id = ? OR o.display_id::text = ?`,
+      [id, id]
     );
 
     if (!orderResult.rows || orderResult.rows.length === 0) {
@@ -42,25 +42,23 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
     const order = orderResult.rows[0];
 
-    // Get line items with full product details
+    // Get line items with full product details (MedusaJS 2.x: order_item links to order_line_item)
     const itemsResult = await pgConnection.raw(
       `SELECT 
         li.id,
         li.title,
-        li.quantity,
+        oi.quantity,
         li.unit_price,
         li.variant_id,
         li.product_id,
-        pv.sku,
-        pv.title as variant_title,
-        pv.barcode,
-        pv.weight,
+        li.variant_sku as sku,
+        li.variant_title,
         p.title as product_title,
         p.handle as product_handle
-       FROM order_line_item li
-       LEFT JOIN product_variant pv ON li.variant_id = pv.id
-       LEFT JOIN product p ON pv.product_id = p.id
-       WHERE li.order_id = $1`,
+       FROM order_item oi
+       JOIN order_line_item li ON oi.item_id = li.id
+       LEFT JOIN product p ON li.product_id = p.id
+       WHERE oi.order_id = ?`,
       [order.id]
     );
 
@@ -78,7 +76,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         a.province
        FROM order_address a
        JOIN "order" o ON o.shipping_address_id = a.id
-       WHERE o.id = $1`,
+       WHERE o.id = ?`,
       [order.id]
     );
 
@@ -96,7 +94,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         a.province
        FROM order_address a
        JOIN "order" o ON o.billing_address_id = a.id
-       WHERE o.id = $1`,
+       WHERE o.id = ?`,
       [order.id]
     );
 
@@ -113,16 +111,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
        FROM payment_collection pc
        LEFT JOIN payment p ON p.payment_collection_id = pc.id
        WHERE pc.id IN (
-         SELECT payment_collection_id FROM order_payment_collection WHERE order_id = $1
+         SELECT payment_collection_id FROM order_payment_collection WHERE order_id = ?
        )`,
       [order.id]
     );
 
-    // Get fulfillment info
+    // Get fulfillment info (MedusaJS 2.x: linked via order_fulfillment)
     const fulfillmentResult = await pgConnection.raw(
       `SELECT 
         f.id,
-        f.status,
         f.shipped_at,
         f.delivered_at,
         f.canceled_at,
@@ -130,7 +127,8 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         f.data,
         f.metadata
        FROM fulfillment f
-       WHERE f.order_id = $1`,
+       JOIN order_fulfillment of2 ON of2.fulfillment_id = f.id
+       WHERE of2.order_id = ?`,
       [order.id]
     );
 
@@ -222,8 +220,8 @@ export const PATCH = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     // Check if order exists
     const orderResult = await pgConnection.raw(
-      `SELECT id, metadata FROM "order" WHERE id = $1 OR display_id::text = $1`,
-      [id]
+      `SELECT id, metadata FROM "order" WHERE id = ? OR display_id::text = ?`,
+      [id, id]
     );
 
     if (!orderResult.rows || orderResult.rows.length === 0) {
@@ -239,10 +237,9 @@ export const PATCH = async (req: MedusaRequest, res: MedusaResponse) => {
     // Prepare updates
     const updates: string[] = [];
     const values: any[] = [];
-    let paramIndex = 1;
 
     if (status) {
-      updates.push(`status = $${paramIndex++}`);
+      updates.push(`status = ?`);
       values.push(status);
     }
 
@@ -258,7 +255,7 @@ export const PATCH = async (req: MedusaRequest, res: MedusaResponse) => {
       },
     };
 
-    updates.push(`metadata = $${paramIndex++}`);
+    updates.push(`metadata = ?`);
     values.push(JSON.stringify(newMetadata));
 
     updates.push(`updated_at = NOW()`);
@@ -266,7 +263,7 @@ export const PATCH = async (req: MedusaRequest, res: MedusaResponse) => {
     values.push(order.id);
 
     await pgConnection.raw(
-      `UPDATE "order" SET ${updates.join(", ")} WHERE id = $${paramIndex}`,
+      `UPDATE "order" SET ${updates.join(", ")} WHERE id = ?`,
       values
     );
 

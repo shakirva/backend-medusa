@@ -70,8 +70,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       // First check if there's a display_id that matches
       const orderSearch = await pgConnection.raw(
         `SELECT id, display_id FROM "order" 
-         WHERE metadata->>'odoo_order_id' = $1
-            OR metadata->>'odoo_order_name' = $2
+         WHERE metadata->>'odoo_order_id' = ?
+            OR metadata->>'odoo_order_name' = ?
          LIMIT 1`,
         [order.odoo_order_id?.toString(), order.odoo_order_name]
       );
@@ -92,7 +92,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     // Verify order exists
     const orderResult = await pgConnection.raw(
-      `SELECT id, display_id, status, metadata FROM "order" WHERE id = $1`,
+      `SELECT id, display_id, status, metadata FROM "order" WHERE id = ?`,
       [medusaOrderId]
     );
 
@@ -174,7 +174,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     // Update order metadata
     await pgConnection.raw(
-      `UPDATE "order" SET metadata = $1, updated_at = NOW() WHERE id = $2`,
+      `UPDATE "order" SET metadata = ?, updated_at = NOW() WHERE id = ?`,
       [JSON.stringify(metadataUpdate), medusaOrderId]
     );
 
