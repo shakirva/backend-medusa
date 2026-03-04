@@ -24,3 +24,25 @@ export async function DELETE(req: MedusaRequest, res: MedusaResponse) {
     res.status(500).json({ message: e?.message || "Failed to delete banner" })
   }
 }
+
+export async function PUT(req: MedusaRequest, res: MedusaResponse) {
+  try {
+    const mediaService = req.scope.resolve(MEDIA_MODULE) as any
+    const id = req.params.id
+    if (!id) {
+      return res.status(400).json({ message: "id is required" })
+    }
+
+    const body = req.body as any
+    // Standard MedusaService update expects the ID inside the data object
+    const updated = await mediaService.updateBanners({
+      ...body,
+      id
+    })
+    res.json({ banner: updated })
+  } catch (e: any) {
+    console.error("Banner update error:", e)
+    res.status(500).json({ message: e?.message || "Failed to update banner" })
+  }
+}
+
