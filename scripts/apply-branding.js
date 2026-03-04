@@ -34,3 +34,18 @@ filesToCopy.forEach(file => {
 });
 
 console.log('✨ marqasouq branding applied!\n');
+
+// Also copy the built admin to public/ so it is served correctly
+const adminSrc = path.join(__dirname, '..', '.medusa', 'server', 'public', 'admin');
+const adminDest = path.join(__dirname, '..', 'public', 'admin');
+if (fs.existsSync(adminSrc)) {
+  try {
+    fs.rmSync(adminDest, { recursive: true, force: true });
+    fs.cpSync(adminSrc, adminDest, { recursive: true });
+    console.log('📋 Copied admin build to public/admin');
+  } catch (err) {
+    console.error('Failed to copy admin build:', err.message);
+  }
+} else {
+  console.log('No admin build found at .medusa/server/public/admin');
+}
