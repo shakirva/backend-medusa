@@ -57,7 +57,7 @@ export default async function odooSync({ container }: ExecArgs) {
       id: 1,
     }, { timeout: 15000 })
     uid = r.data.result
-    if (!uid || uid === false) {
+    if (!uid) {
       console.error("Authentication failed - Odoo returned:", uid)
       console.error("Ask Odoo developer to verify credentials / API key")
       return
