@@ -1,42 +1,29 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils"
-import OdooSyncService from "../../../../modules/odoo-sync/service"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import * as fs from "fs"
 import * as path from "path"
 
 /**
  * POST /odoo/webhooks/products
  * 
- * Real-time webhook for Odoo to push product create/update/delete events.
+ * SELF-CONTAINED webhook - Odoo pushes ALL product data directly.
+ * No callback to Odoo needed. Works even if Odoo credentials change.
  * 
- * Configure an Odoo Automated Action on product.template to call this
- * endpoint whenever a product is created, updated, or deleted.
- * 
- * Request body:
- * {
- *   "event_type": "product.created" | "product.updated" | "product.deleted",
- *   "webhook_secret": "your-shared-secret",
- *   "product": {
- *     "odoo_id": 123,           // product.template ID (required)
- *     // ... optional overrides, or we re-fetch from Odoo
- *   }
- * }
+ * Supports single + bulk operations.
  */
 
-const WEBHOOK_SECRET = process.env.ODOO_WEBHOOK_SECRET || ""
+const WEBHOOK_SECRET = process.env.ODOO_WEBHOOK_SECRET || "marqa-odoo-webhook-2026"
 const IMAGE_DIR = path.join(process.cwd(), "static", "uploads", "products")
 
 function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/(^-|-$)/g, "")
-    .substring(0, 100)
+  return text.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").replace(/(^-|-$)/g, "").substring(0, 100)
 }
 
-function toSmallestUnit(amount: number): number {
-  return Math.round(amount * 1000) // KWD uses 3 decimal places
+function genId(prefix: string): string {
+  const c = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+  let id = prefix + "_"
+  for (let i = 0; i < 26; i++) id += c[Math.floor(Math.random() * c.length)]
+  return id
 }
 
 async function saveBase64Image(base64Data: string, filename: string): Promise<string | null> {
@@ -50,172 +37,245 @@ async function saveBase64Image(base64Data: string, filename: string): Promise<st
   }
 }
 
-export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
-  const productService = req.scope.resolve(Modules.PRODUCT)
-  const pgConnection = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+interface OdooProductPayload {
+  odoo_id: number
+  name: string
+  default_code?: string
+  barcode?: string
+  list_price?: number
+  compare_list_price?: number
+  currency_code?: string
+  description_sale?: string
+  description?: string
+  categ_id?: [number, string] | false
+  brand?: string
+  weight?: number
+  image_url?: string
+  image_1920?: string
+  images?: string[]
+  qty_available?: number
+  is_published?: boolean
+  [key: string]: any
+}
 
-  const { event_type, webhook_secret, product: productData } = req.body as {
-    event_type: "product.created" | "product.updated" | "product.deleted"
-    webhook_secret?: string
-    product: {
-      odoo_id: number
-      [key: string]: any
-    }
+async function upsertProduct(
+  pg: any,
+  p: OdooProductPayload,
+  salesChannelId: string | null,
+  existingHandles: Set<string>
+): Promise<{ action: string; productId: string }> {
+  const odooId = p.odoo_id
+  const sku = p.default_code || `ODOO-${odooId}`
+  const title = p.name || `Odoo Product ${odooId}`
+  const price = p.list_price || 0
+  const currency = (p.currency_code || "aed").toLowerCase()
+  const description = p.description_sale || p.description || ""
+  const weight = p.weight ? String(p.weight) : null
+  const status = p.is_published === false ? "draft" : "published"
+  const brand = p.brand || null
+  const category = p.categ_id && Array.isArray(p.categ_id) ? p.categ_id[1] : null
+
+  const metadata = {
+    odoo_id: odooId,
+    odoo_sku: sku,
+    odoo_barcode: p.barcode || null,
+    odoo_category: category,
+    odoo_brand: brand,
+    odoo_qty: p.qty_available || 0,
+    synced_at: new Date().toISOString(),
   }
 
-  // ── Validate ──
-  if (!event_type || !productData?.odoo_id) {
-    return res.status(400).json({
-      type: "invalid_data",
-      message: "event_type and product.odoo_id are required",
-    })
-  }
-
-  // ── Auth (optional shared secret) ──
-  if (WEBHOOK_SECRET && webhook_secret !== WEBHOOK_SECRET) {
-    return res.status(401).json({
-      type: "unauthorized",
-      message: "Invalid webhook_secret",
-    })
-  }
-
-  const odooId = productData.odoo_id
-  console.log(`[Odoo Webhook] ${event_type} for product template ID: ${odooId}`)
-
-  try {
-    // ── DELETE event ──
-    if (event_type === "product.deleted") {
-      // Find Medusa product by odoo_id in metadata
-      const existing = await productService.listProducts(
-        { metadata: { odoo_id: odooId } } as any,
-        { select: ["id", "title"], take: 1 }
+  // Check if product exists by odoo_id or SKU
+  const existing = await pg.raw(
+    `SELECT id, handle FROM product WHERE metadata->>'odoo_id' = ? AND deleted_at IS NULL LIMIT 1`,
+    [String(odooId)]
+  )
+  const existBySku = existing.rows?.length
+    ? existing
+    : await pg.raw(
+        `SELECT p.id, p.handle FROM product p JOIN product_variant pv ON pv.product_id = p.id WHERE pv.sku = ? AND p.deleted_at IS NULL AND pv.deleted_at IS NULL LIMIT 1`,
+        [sku]
       )
 
-      if (existing.length > 0) {
-        await productService.deleteProducts([existing[0].id])
-        console.log(`[Odoo Webhook] ✅ Deleted product: ${existing[0].title} (${existing[0].id})`)
-        return res.status(200).json({
-          status: "success",
-          action: "deleted",
-          medusa_product_id: existing[0].id,
-        })
-      }
-
-      return res.status(200).json({
-        status: "not_found",
-        message: `No Medusa product found for Odoo ID ${odooId}`,
-      })
-    }
-
-    // ── CREATE / UPDATE — Fetch full product from Odoo ──
-    const odoo = new OdooSyncService()
-    if (!odoo.isConfigured()) {
-      return res.status(500).json({
-        type: "configuration_error",
-        message: "Odoo is not configured on the backend",
-      })
-    }
-
-    const odooProduct = await odoo.fetchProductById(odooId)
-    if (!odooProduct) {
-      return res.status(404).json({
-        type: "not_found",
-        message: `Product template ${odooId} not found in Odoo`,
-      })
-    }
-
-    // Resolve brand
-    let brandName: string | null = null
-    if (odooProduct.brand_id && Array.isArray(odooProduct.brand_id)) {
-      brandName = odooProduct.brand_id[1]
-    } else if (odooProduct.x_studio_brand_1) {
-      brandName = odooProduct.x_studio_brand_1 as string
-    }
-
-    // Resolve ribbon
-    let ribbonText: string | null = null
-    if (odooProduct.website_ribbon_id && Array.isArray(odooProduct.website_ribbon_id)) {
-      ribbonText = odooProduct.website_ribbon_id[1]
-    }
-
-    // Convert to Medusa format
-    const medusaData = odoo.convertToMedusaProduct(odooProduct, {
-      brandName: brandName || undefined,
-      ribbonText: ribbonText || undefined,
-    })
-
-    // Check if product already exists
-    const existing = await productService.listProducts(
-      {},
-      { select: ["id", "handle", "metadata"], take: 5000 }
+  if (existBySku.rows?.length > 0) {
+    const prodId = existBySku.rows[0].id
+    await pg.raw(
+      `UPDATE product SET title=?, description=?, status=?, weight=?, metadata=?, thumbnail=COALESCE(?, thumbnail), updated_at=NOW() WHERE id=?`,
+      [title, description, status, weight, JSON.stringify(metadata), p.image_url || null, prodId]
     )
-    const existingProduct = existing.find(
-      (p: any) => p.metadata?.odoo_id === odooId || p.metadata?.odoo_id === String(odooId)
+    const varRes = await pg.raw(
+      `SELECT pv.id as vid, pvps.price_set_id as psid FROM product_variant pv LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id WHERE pv.product_id = ? AND pv.deleted_at IS NULL LIMIT 1`,
+      [prodId]
     )
-
-    let medusaProductId: string
-    let action: string
-
-    if (existingProduct) {
-      // UPDATE
-      await productService.updateProducts(existingProduct.id, {
-        title: medusaData.title,
-        subtitle: medusaData.subtitle,
-        description: medusaData.description,
-        status: medusaData.status as any,
-        weight: medusaData.weight,
-        metadata: medusaData.metadata,
-      })
-      medusaProductId = existingProduct.id
-      action = "updated"
-    } else {
-      // CREATE
-      const created: any = await productService.createProducts(medusaData as any)
-      medusaProductId = Array.isArray(created) ? created[0]?.id : created?.id
-      action = "created"
+    if (varRes.rows?.length > 0 && varRes.rows[0].psid && price > 0) {
+      const rawAmount = JSON.stringify({ value: String(price), precision: 20 })
+      await pg.raw(
+        `UPDATE price SET amount=?, raw_amount=?, currency_code=?, updated_at=NOW() WHERE price_set_id=? AND deleted_at IS NULL`,
+        [price, rawAmount, currency, varRes.rows[0].psid]
+      )
     }
+    return { action: "updated", productId: prodId }
+  }
 
-    // Save main image
-    if (odooProduct.image_1920 && typeof odooProduct.image_1920 === "string") {
-      const sku = (odooProduct.default_code as string) || `odoo-${odooId}`
-      const filename = `${slugify(sku)}.png`
-      const imageUrl = await saveBase64Image(odooProduct.image_1920, filename)
-      if (imageUrl && medusaProductId) {
-        await productService.updateProducts(medusaProductId, {
-          thumbnail: imageUrl,
-          images: [{ url: imageUrl }],
-        })
+  // CREATE new product
+  let handle = slugify(title)
+  if (!handle) handle = `odoo-${odooId}`
+  if (existingHandles.has(handle)) handle = `${handle}-${odooId}`
+  if (existingHandles.has(handle)) handle = `${handle}-${Date.now().toString(36)}`
+  existingHandles.add(handle)
+
+  let thumbnail: string | null = p.image_url || null
+  if (!thumbnail && p.image_1920) {
+    const filename = `${slugify(sku)}-${odooId}.png`
+    thumbnail = await saveBase64Image(p.image_1920, filename)
+  }
+
+  const productId = genId("prod")
+  await pg.raw(
+    `INSERT INTO product (id, title, handle, subtitle, description, thumbnail, status, weight, metadata, discountable, is_giftcard, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true, false, NOW(), NOW())`,
+    [productId, title, handle, brand || "", description, thumbnail, status, weight, JSON.stringify(metadata)]
+  )
+
+  const variantId = genId("variant")
+  await pg.raw(
+    `INSERT INTO product_variant (id, product_id, title, sku, barcode, manage_inventory, allow_backorder, variant_rank, created_at, updated_at) VALUES (?, ?, 'Default', ?, ?, true, false, 0, NOW(), NOW())`,
+    [variantId, productId, sku, p.barcode || null]
+  )
+
+  if (price > 0) {
+    const priceSetId = genId("pset")
+    await pg.raw(`INSERT INTO price_set (id, created_at, updated_at) VALUES (?, NOW(), NOW())`, [priceSetId])
+    await pg.raw(
+      `INSERT INTO product_variant_price_set (id, variant_id, price_set_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())`,
+      [genId("pvps"), variantId, priceSetId]
+    )
+    const rawAmount = JSON.stringify({ value: String(price), precision: 20 })
+    await pg.raw(
+      `INSERT INTO price (id, price_set_id, currency_code, amount, raw_amount, rules_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, NOW(), NOW())`,
+      [genId("price"), priceSetId, currency, price, rawAmount]
+    )
+  }
+
+  if (thumbnail) {
+    await pg.raw(
+      `INSERT INTO image (id, url, rank, product_id, created_at, updated_at) VALUES (?, ?, 0, ?, NOW(), NOW())`,
+      [genId("img"), thumbnail, productId]
+    )
+  }
+  if (p.images && Array.isArray(p.images)) {
+    for (let idx = 0; idx < p.images.length; idx++) {
+      await pg.raw(
+        `INSERT INTO image (id, url, rank, product_id, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())`,
+        [genId("img"), p.images[idx], idx + 1, productId]
+      )
+    }
+  }
+
+  if (salesChannelId) {
+    try {
+      await pg.raw(
+        `INSERT INTO product_sales_channel (id, product_id, sales_channel_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW()) ON CONFLICT (product_id, sales_channel_id) DO NOTHING`,
+        [genId("psc"), productId, salesChannelId]
+      )
+    } catch { /* ignore */ }
+  }
+
+  return { action: "created", productId }
+}
+
+export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  const pg = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+  const startTime = Date.now()
+  const body = req.body as any
+  const { event_type, webhook_secret } = body
+
+  if (WEBHOOK_SECRET && webhook_secret !== WEBHOOK_SECRET) {
+    return res.status(401).json({ type: "unauthorized", message: "Invalid webhook_secret" })
+  }
+  if (!event_type) {
+    return res.status(400).json({ type: "invalid_data", message: "event_type is required" })
+  }
+
+  console.log(`[Odoo Webhook] ${event_type} received`)
+
+  try {
+    const scRes = await pg.raw(`SELECT id FROM sales_channel WHERE deleted_at IS NULL LIMIT 1`)
+    const salesChannelId = scRes.rows?.[0]?.id || null
+    const hRes = await pg.raw(`SELECT handle FROM product WHERE deleted_at IS NULL`)
+    const existingHandles = new Set<string>(hRes.rows?.map((r: any) => r.handle) || [])
+
+    // DELETE
+    if (event_type === "product.deleted") {
+      const odooId = body.product?.odoo_id
+      if (!odooId) return res.status(400).json({ message: "product.odoo_id required" })
+      const found = await pg.raw(
+        `SELECT id, title FROM product WHERE metadata->>'odoo_id' = ? AND deleted_at IS NULL`,
+        [String(odooId)]
+      )
+      if (found.rows?.length > 0) {
+        await pg.raw(`UPDATE product SET deleted_at=NOW(), status='draft' WHERE id=?`, [found.rows[0].id])
+        console.log(`[Odoo Webhook] Deleted: ${found.rows[0].title}`)
+        return res.json({ status: "success", action: "deleted", id: found.rows[0].id })
       }
+      return res.json({ status: "not_found", message: `No product for Odoo ID ${odooId}` })
     }
 
-    console.log(`[Odoo Webhook] ✅ ${action} product: ${odooProduct.name} → ${medusaProductId}`)
+    // BULK
+    if (event_type === "product.bulk") {
+      const products: OdooProductPayload[] = body.products || []
+      if (!products.length) return res.status(400).json({ message: "products array required" })
+      let created = 0, updated = 0, errors = 0
+      for (const p of products) {
+        try {
+          if (!p.odoo_id || !p.name) { errors++; continue }
+          const r = await upsertProduct(pg, p, salesChannelId, existingHandles)
+          if (r.action === "created") created++; else updated++
+        } catch (err: any) {
+          errors++
+          console.error(`[Odoo Webhook] Bulk err [${p.odoo_id}]: ${err.message}`)
+        }
+      }
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+      console.log(`[Odoo Webhook] Bulk done: created=${created} updated=${updated} errors=${errors} (${elapsed}s)`)
+      return res.json({ status: "success", action: "bulk", created, updated, errors, total: products.length, elapsed_seconds: elapsed })
+    }
 
-    return res.status(200).json({
-      status: "success",
-      action,
-      medusa_product_id: medusaProductId,
-      odoo_id: odooId,
-      product_name: odooProduct.name,
-    })
+    // SINGLE CREATE/UPDATE
+    const p: OdooProductPayload = body.product
+    if (!p?.odoo_id || !p?.name) {
+      return res.status(400).json({ message: "product.odoo_id and product.name are required" })
+    }
+    const result = await upsertProduct(pg, p, salesChannelId, existingHandles)
+    console.log(`[Odoo Webhook] ${result.action}: ${p.name} -> ${result.productId}`)
+    return res.json({ status: "success", ...result, odoo_id: p.odoo_id, product_name: p.name })
 
   } catch (error: any) {
-    console.error(`[Odoo Webhook] ❌ Error processing ${event_type} for ${odooId}:`, error.message)
-    return res.status(500).json({
-      type: "error",
-      message: error.message,
-    })
+    console.error(`[Odoo Webhook] Error:`, error.message)
+    return res.status(500).json({ type: "error", message: error.message })
   }
 }
 
-/**
- * GET /odoo/webhooks/products
- * Health check / status endpoint
- */
 export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
-  return res.status(200).json({
+  const pg = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+  const countRes = await pg.raw(`SELECT COUNT(*) as c FROM product WHERE status='published' AND deleted_at IS NULL`)
+  const odooCount = await pg.raw(`SELECT COUNT(*) as c FROM product WHERE metadata->>'odoo_id' IS NOT NULL AND deleted_at IS NULL`)
+
+  return res.json({
     status: "active",
     endpoint: "/odoo/webhooks/products",
-    supported_events: ["product.created", "product.updated", "product.deleted"],
-    note: "POST product data from Odoo automated actions to this endpoint",
+    total_products: parseInt(countRes.rows?.[0]?.c || "0"),
+    odoo_synced_products: parseInt(odooCount.rows?.[0]?.c || "0"),
+    supported_events: ["product.created", "product.updated", "product.deleted", "product.bulk"],
+    webhook_secret: "Required in request body",
+    example_single: {
+      event_type: "product.created",
+      webhook_secret: "<secret>",
+      product: { odoo_id: 123, name: "Product Name", default_code: "SKU-001", list_price: 99.99, currency_code: "aed", description_sale: "Description", brand: "Brand", image_url: "https://example.com/image.jpg", is_published: true },
+    },
+    example_bulk: {
+      event_type: "product.bulk",
+      webhook_secret: "<secret>",
+      products: ["... array of product objects ..."],
+    },
   })
 }
