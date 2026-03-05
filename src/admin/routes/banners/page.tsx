@@ -227,6 +227,7 @@ const BannersPage = () => {
                 <option value="single">Single Wide Banner</option>
                 <option value="dual">Dual Side-by-Side Banners</option>
                 <option value="triple">Triple Grid Banners</option>
+                <option value="hot_deal">Hot Deal Banner</option>
               </select>
             </div>
 
@@ -343,6 +344,7 @@ const BannersPage = () => {
                           <option value="single">Single Wide Banner</option>
                           <option value="dual">Dual Side-by-Side Banners</option>
                           <option value="triple">Triple Grid Banners</option>
+                          <option value="hot_deal">Hot Deal Banner</option>
                         </select>
                       </div>
 

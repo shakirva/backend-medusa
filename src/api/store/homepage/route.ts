@@ -132,12 +132,13 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       return fetchByCollection(handles, limit)
     }
 
-    const [hostDeals, powerbanks, laptops, newArrivals, recommended] = await Promise.all([
+    const [hostDeals, powerbanks, laptops, newArrivals, recommended, appleProducts] = await Promise.all([
       fetchSection('host_deals', 8),
       fetchSection('best_in_powerbanks', 8),
       fetchSection('best_in_laptops', 8),
       fetchSection('new_arrival', 12),
       fetchSection('recommended', 12),
+      fetchSection('apple', 12),
     ])
 
     // If recommended is empty, fall back to latest products
@@ -169,6 +170,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       { id: 'best_in_laptops', type: 'product_grid', title: 'Best in Laptops', items: toItems(laptops), products: laptops },
       { id: 'new_arrival', type: 'product_grid', title: 'New Arrivals', items: toItems(newArrivals), products: newArrivals },
       { id: 'recommended', type: 'product_grid', title: 'Recommended', items: toItems(recommendedFinal), products: recommendedFinal },
+      { id: 'apple', type: 'product_grid', title: 'Apple', items: toItems(appleProducts), products: appleProducts },
     ]
 
     res.json({

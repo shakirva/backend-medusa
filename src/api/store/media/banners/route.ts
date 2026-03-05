@@ -18,9 +18,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     // Align with Admin positions seen in UI: hero | dual | triple
     const positionFilter =
       type === "hero" ? "hero" :
-      type === "single" ? "single" :
-      type === "dual" ? "dual" :
-      type === "triple" ? "triple" : undefined
+        type === "single" ? "single" :
+          type === "dual" ? "dual" :
+            type === "triple" ? "triple" :
+              type === "hot_deal" ? "hot_deal" : undefined
 
     const where: any = { is_active: true }
     if (positionFilter) where.position = positionFilter
