@@ -1,7 +1,5 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
-import * as fs from "fs"
-import * as path from "path"
 
 /**
  * POST /odoo/webhooks/products
@@ -9,11 +7,13 @@ import * as path from "path"
  * SELF-CONTAINED webhook - Odoo pushes ALL product data directly.
  * No callback to Odoo needed. Works even if Odoo credentials change.
  * 
+ * Images use direct Odoo URLs instead of downloading/storing locally.
+ * 
  * Supports single + bulk operations.
  */
 
 const WEBHOOK_SECRET = process.env.ODOO_WEBHOOK_SECRET || "marqa-odoo-webhook-2026"
-const IMAGE_DIR = path.join(process.cwd(), "static", "uploads", "products")
+const ODOO_BASE_URL = process.env.ODOO_URL || "https://oskarllc-new-27289548.dev.odoo.com"
 
 function slugify(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").replace(/(^-|-$)/g, "").substring(0, 100)
@@ -26,15 +26,11 @@ function genId(prefix: string): string {
   return id
 }
 
-async function saveBase64Image(base64Data: string, filename: string): Promise<string | null> {
-  try {
-    if (!fs.existsSync(IMAGE_DIR)) fs.mkdirSync(IMAGE_DIR, { recursive: true })
-    const buffer = Buffer.from(base64Data, "base64")
-    fs.writeFileSync(path.join(IMAGE_DIR, filename), buffer)
-    return `/static/uploads/products/${filename}`
-  } catch {
-    return null
-  }
+/**
+ * Generate direct Odoo image URL for a product
+ */
+function getOdooImageUrl(odooId: number): string {
+  return `${ODOO_BASE_URL}/web/image/product.product/${odooId}/image_1920`
 }
 
 interface OdooProductPayload {
@@ -125,9 +121,9 @@ async function upsertProduct(
   existingHandles.add(handle)
 
   let thumbnail: string | null = p.image_url || null
-  if (!thumbnail && p.image_1920) {
-    const filename = `${slugify(sku)}-${odooId}.png`
-    thumbnail = await saveBase64Image(p.image_1920, filename)
+  if (!thumbnail && (p.image_1920 || p.odoo_id)) {
+    // Use direct Odoo image URL instead of saving base64 locally
+    thumbnail = getOdooImageUrl(odooId)
   }
 
   const productId = genId("prod")

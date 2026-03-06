@@ -128,7 +128,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     await pgConnection.raw(
       `INSERT INTO product_qa (id, product_id, customer_id, customer_name, question, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', NOW(), NOW())`,
+       VALUES (?, ?, ?, ?, ?, 'approved', NOW(), NOW())`,
       [id, productId, customer_id || null, name, question]
     )
 

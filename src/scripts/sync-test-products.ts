@@ -16,10 +16,8 @@ import OdooSyncService, {
   OdooAttributeValue,
   OdooTag,
 } from "../modules/odoo-sync/service"
-import * as fs from "fs"
-import * as path from "path"
 
-const IMAGE_DIR = path.join(process.cwd(), "static", "uploads", "products")
+const ODOO_BASE_URL = process.env.ODOO_URL || "https://oskarllc-new-27289548.dev.odoo.com"
 
 function slugify(text: string): string {
   return text
@@ -31,14 +29,15 @@ function slugify(text: string): string {
     .substring(0, 100)
 }
 
-function saveBase64Image(base64Data: string, filename: string): string | null {
-  try {
-    if (!fs.existsSync(IMAGE_DIR)) fs.mkdirSync(IMAGE_DIR, { recursive: true })
-    fs.writeFileSync(path.join(IMAGE_DIR, filename), Buffer.from(base64Data, "base64"))
-    return `/static/uploads/products/${filename}`
-  } catch {
-    return null
-  }
+/**
+ * Generate a direct Odoo image URL instead of downloading and saving locally.
+ */
+function getOdooImageUrl(odooId: number): string {
+  return `${ODOO_BASE_URL}/web/image/product.template/${odooId}/image_1920`
+}
+
+function getOdooGalleryImageUrl(imageId: number): string {
+  return `${ODOO_BASE_URL}/web/image/product.image/${imageId}/image_1920`
 }
 
 const TEST_PRODUCT_IDS = [92486, 84925]
@@ -290,33 +289,25 @@ export default async function syncTestProducts({ container }: ExecArgs) {
         }
       }
 
-      // ── Save images ──
+      // ── Set images (direct Odoo URLs) ──
       const medusaId = odooIdMap.get(odooId)
       if (medusaId && odooProduct.image_1920 && typeof odooProduct.image_1920 === "string") {
-        const filename = `${slugify(odooProduct.name)}.png`
-        const imageUrl = saveBase64Image(odooProduct.image_1920, filename)
+        const imageUrl = getOdooImageUrl(odooProduct.id)
         if (imageUrl) {
           const imageUrls = [{ url: imageUrl }]
 
-          // Gallery images
+          // Gallery images — use direct Odoo URLs
           if (odooProduct.product_template_image_ids?.length > 0) {
-            try {
-              const gallery = await odoo.fetchProductImages(odooProduct.product_template_image_ids)
-              for (const img of gallery) {
-                if (img.image_1920 && typeof img.image_1920 === "string") {
-                  const gFilename = `${slugify(odooProduct.name)}-gallery-${img.id}.png`
-                  const gUrl = saveBase64Image(img.image_1920, gFilename)
-                  if (gUrl) imageUrls.push({ url: gUrl })
-                }
-              }
-            } catch { /* ignore gallery errors */ }
+            for (const galleryImgId of odooProduct.product_template_image_ids) {
+              imageUrls.push({ url: getOdooGalleryImageUrl(galleryImgId) })
+            }
           }
 
           await productService.updateProducts(medusaId, {
             thumbnail: imageUrl,
             images: imageUrls,
           })
-          console.log(`  🖼️  Images: ${imageUrls.length} saved (main + gallery)`)
+          console.log(`  🖼️  Images: ${imageUrls.length} URLs set (main + gallery)`)
         }
       }
 

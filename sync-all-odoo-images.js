@@ -1,20 +1,13 @@
 const { Pool } = require('pg');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 
 const ODOO_URL = "https://oskarllc-new-27289548.dev.odoo.com";
 const ODOO_DB = "oskarllc-new-27289548";
 const ODOO_USER = "SYG";
 const ODOO_PASS = "S123456";
-const UPLOAD_DIR = path.join(process.cwd(), "static", "uploads", "products");
 
 async function syncAllImages() {
-  console.log("Syncing ALL Odoo product images...\n");
-  
-  if (!fs.existsSync(UPLOAD_DIR)) {
-    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  }
+  console.log("Setting Odoo direct image URLs for ALL products...\n");
 
   const pool = new Pool({
     connectionString: "postgres://marqa_user:marqa123@localhost:5432/marqa_souq_dev"
@@ -51,7 +44,7 @@ async function syncAllImages() {
   const imageMap = new Map();
   odooProducts.forEach(p => {
     if (p.image_1920 && p.image_1920 !== false) {
-      imageMap.set(p.id, p.image_1920);
+      imageMap.set(p.id, true);  // Just track which products have images
     }
   });
   console.log("   With images:", imageMap.size);
@@ -62,32 +55,25 @@ async function syncAllImages() {
   );
   console.log("   Found:", medusaProducts.rowCount, "products");
 
-  console.log("\n4. Syncing images...");
+  console.log("\n4. Setting direct Odoo image URLs...");
   let synced = 0, skipped = 0, noImage = 0;
 
   for (const product of medusaProducts.rows) {
     const odooId = parseInt(product.odoo_id);
-    const base64Image = imageMap.get(odooId);
+    const hasImage = imageMap.has(odooId);
 
-    if (!base64Image) { noImage++; continue; }
+    if (!hasImage) { noImage++; continue; }
 
     const existingImage = await pool.query(
       "SELECT id FROM image WHERE product_id = $1 AND url LIKE $2 AND deleted_at IS NULL",
-      [product.id, "%odoo-" + odooId + "%"]
+      [product.id, "%" + ODOO_URL + "%"]
     );
     
     if (existingImage.rowCount > 0) { skipped++; continue; }
 
     try {
-      const imageBuffer = Buffer.from(base64Image, "base64");
-      let ext = "jpg";
-      if (imageBuffer[0] === 0x89 && imageBuffer[1] === 0x50) ext = "png";
-      
-      const filename = "odoo-" + odooId + "." + ext;
-      const filePath = path.join(UPLOAD_DIR, filename);
-      fs.writeFileSync(filePath, imageBuffer);
-
-      const imageUrl = "http://localhost:9000/static/uploads/products/" + filename;
+      // Use Odoo direct image URL instead of downloading
+      const imageUrl = ODOO_URL + "/web/image/product.product/" + odooId + "/image_1920";
       const imageId = "img_sync_" + odooId + "_" + Date.now();
 
       await pool.query(
@@ -101,7 +87,7 @@ async function syncAllImages() {
       );
 
       synced++;
-      if (synced % 10 === 0) console.log("   Synced " + synced + "...");
+      if (synced % 10 === 0) console.log("   Set " + synced + " URLs...");
     } catch (err) {
       console.log("   Error:", err.message);
     }

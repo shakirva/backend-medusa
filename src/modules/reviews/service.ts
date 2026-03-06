@@ -4,7 +4,7 @@ import Review from "./models/review"
 class ReviewService extends MedusaService({ Review }) {
   async addReview(customer_id: string, product_id: string, rating: number, title?: string, content?: string) {
     const clamped = Math.max(1, Math.min(5, Number(rating)))
-    return this.createReviews({ customer_id, product_id, rating: clamped, title, content })
+    return this.createReviews({ customer_id, product_id, rating: clamped, title, content, status: "approved" })
   }
 
   async listApprovedByProduct(product_id: string) {

@@ -34,17 +34,14 @@ import OdooSyncService, {
   OdooRibbon,
   OdooTag,
 } from "../modules/odoo-sync/service"
-import * as fs from "fs"
-import * as path from "path"
-import axios from "axios"
 
 // ─────────────────────────────────────────────────
 //  CONFIGURATION
 // ─────────────────────────────────────────────────
 
 const BATCH_SIZE = 50          // Products per batch from Odoo
-const MAX_PRODUCTS = 2000      // Safety limit
-const IMAGE_DIR = path.join(process.cwd(), "static", "uploads", "products")
+const MAX_PRODUCTS = 4000      // Safety limit - increased to get more products
+const ODOO_BASE_URL = process.env.ODOO_URL || "https://oskarllc-new-27289548.dev.odoo.com"
 const DEFAULT_CURRENCY_CODE = "omr"    // Default currency (from Odoo)
 const DEFAULT_CURRENCY_DECIMALS = 3    // OMR/KWD have 3 decimal places
 
@@ -66,19 +63,20 @@ function toSmallestUnit(amount: number): number {
   return Math.round(amount * Math.pow(10, DEFAULT_CURRENCY_DECIMALS))
 }
 
-async function saveBase64Image(base64Data: string, filename: string): Promise<string | null> {
-  try {
-    if (!fs.existsSync(IMAGE_DIR)) {
-      fs.mkdirSync(IMAGE_DIR, { recursive: true })
-    }
-    const buffer = Buffer.from(base64Data, "base64")
-    const filePath = path.join(IMAGE_DIR, filename)
-    fs.writeFileSync(filePath, buffer)
-    return `/static/uploads/products/${filename}`
-  } catch (error: any) {
-    console.warn(`  ⚠️  Failed to save image ${filename}:`, error.message)
-    return null
-  }
+/**
+ * Generate a direct Odoo image URL instead of downloading and saving locally.
+ * Odoo serves images publicly at: {ODOO_URL}/web/image/{model}/{id}/{field}
+ */
+function getOdooImageUrl(odooId: number, field: string = "image_1920"): string {
+  return `${ODOO_BASE_URL}/web/image/product.template/${odooId}/${field}`
+}
+
+function getOdooGalleryImageUrl(imageId: number): string {
+  return `${ODOO_BASE_URL}/web/image/product.image/${imageId}/image_1920`
+}
+
+function getOdooBrandLogoUrl(brandId: number): string {
+  return `${ODOO_BASE_URL}/web/image/product.brand/${brandId}/logo`
 }
 
 // ─────────────────────────────────────────────────
@@ -160,10 +158,10 @@ export default async function syncOdooFull({ container }: ExecArgs) {
         const slug = slugify(odooBrand.name)
         const existing = await brandService.listBrands({ slug })
         if (existing.length === 0) {
-          // Save brand logo if available
+          // Use direct Odoo URL for brand logo
           let logoUrl: string | null = null
           if (odooBrand.logo) {
-            logoUrl = await saveBase64Image(odooBrand.logo, `brand-${slug}.png`)
+            logoUrl = getOdooBrandLogoUrl(odooBrand.id)
           }
           await brandService.createBrands({
             name: odooBrand.name,
@@ -412,12 +410,10 @@ export default async function syncOdooFull({ container }: ExecArgs) {
           }
         }
 
-        // ── Save main image ──
+        // ── Set main image URL (direct from Odoo) ──
         if (odooProduct.image_1920 && typeof odooProduct.image_1920 === "string") {
           try {
-            const sku = (odooProduct.default_code as string) || `odoo-${odooProduct.id}`
-            const filename = `${slugify(sku)}.png`
-            const imageUrl = await saveBase64Image(odooProduct.image_1920, filename)
+            const imageUrl = getOdooImageUrl(odooProduct.id)
 
             if (imageUrl) {
               const medusaId = odooIdToMedusaId.get(odooProduct.id)
@@ -430,14 +426,13 @@ export default async function syncOdooFull({ container }: ExecArgs) {
             }
           } catch (imgError: any) {
             // Don't fail the whole product for image errors
-            console.warn(`   ⚠️  Image save failed for "${odooProduct.name}": ${imgError.message}`)
+            console.warn(`   ⚠️  Image URL failed for "${odooProduct.name}": ${imgError.message}`)
           }
         }
 
-        // ── Save gallery images ──
+        // ── Set gallery image URLs (direct from Odoo) ──
         if (odooProduct.product_template_image_ids?.length > 0) {
           try {
-            const galleryImages = await odoo.fetchProductImages(odooProduct.product_template_image_ids)
             const imageUrls: Array<{ url: string }> = []
 
             // Keep main image first
@@ -449,14 +444,10 @@ export default async function syncOdooFull({ container }: ExecArgs) {
               }
             }
 
-            for (const galleryImg of galleryImages) {
-              if (galleryImg.image_1920 && typeof galleryImg.image_1920 === "string") {
-                const filename = `${slugify((odooProduct.default_code as string) || `odoo-${odooProduct.id}`)}-gallery-${galleryImg.id}.png`
-                const url = await saveBase64Image(galleryImg.image_1920, filename)
-                if (url) {
-                  imageUrls.push({ url })
-                }
-              }
+            // Add gallery images using direct Odoo URLs
+            for (const galleryImgId of odooProduct.product_template_image_ids) {
+              const url = getOdooGalleryImageUrl(galleryImgId)
+              imageUrls.push({ url })
             }
 
             if (imageUrls.length > 0 && medusaId) {

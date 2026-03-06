@@ -22,12 +22,21 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const mediaService = req.scope.resolve(MEDIA_MODULE) as any
     const pgConnection = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION) as any
 
-    const origin = (process.env.MEDUSA_URL || 'http://localhost:9000').replace(/\/$/, '')
+    // Use BACKEND_URL env or build from request headers (works on localhost AND production)
+    const origin = (
+      process.env.BACKEND_URL ||
+      process.env.MEDUSA_URL ||
+      `${req.protocol}://${req.get('host')}`
+    ).replace(/\/$/, '')
 
     const makeAbsolute = (u: string | null) => {
       if (!u) return null
-      if (u.startsWith('http://') || u.startsWith('https://')) return u
-      return `${origin}${u.startsWith('/') ? u : '/' + u}`
+      // Strip any hardcoded localhost URL so it works on production too
+      let cleaned = u
+        .replace(/^https?:\/\/localhost:\d+/, '')
+        .replace(/^https?:\/\/127\.0\.0\.1:\d+/, '')
+      if (cleaned.startsWith('http://') || cleaned.startsWith('https://')) return cleaned
+      return `${origin}${cleaned.startsWith('/') ? cleaned : '/' + cleaned}`
     }
 
     // ── Banners ──────────────────────────────────────────────
