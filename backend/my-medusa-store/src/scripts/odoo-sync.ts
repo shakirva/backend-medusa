@@ -1,270 +1,237 @@
 import { ExecArgs } from "@medusajs/framework/types"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import axios from "axios"
 
 /**
- * Odoo Sync Script
+ * Odoo -> MedusaJS Full Product Sync (v3)
  * 
- * This script synchronizes products from Odoo ERP to MedusaJS.
- * It can be run manually using: yarn sync:odoo
+ * Run: npx medusa exec src/scripts/odoo-sync.ts
+ *   or: npm run sync:odoo
  * 
  * Features:
- * - Authenticates with Odoo using JSON-RPC
- * - Fetches all active products from Odoo
- * - Creates new products in MedusaJS for any missing items
- * - Updates product inventory
- * - Assigns products to sales channel
+ * - Paginates through ALL Odoo products (supports 6000+)
+ * - Uses raw SQL for fast bulk inserts
+ * - Upserts: creates new, updates existing (matched by odoo_id or SKU)
+ * - Copies prices, images, assigns sales channel
+ *
+ * @version 3.0 - March 2026
  */
 
-interface OdooProduct {
-  id: number
-  name: string
-  default_code: string | false
-  list_price: number
-  description_sale: string | false
-  categ_id: [number, string] | false
-  image_1920: string | false
-  barcode: string | false
-  qty_available: number
-  active: boolean
+const PAGE_SIZE = 200
+const CURRENCY = "aed"
+
+function genId(prefix: string): string {
+  const c = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+  let id = prefix + "_"
+  for (let i = 0; i < 26; i++) id += c[Math.floor(Math.random() * c.length)]
+  return id
+}
+
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").replace(/(^-|-$)/g, "").substring(0, 100)
 }
 
 export default async function odooSync({ container }: ExecArgs) {
-  console.log("\n🔄 Starting Odoo to MedusaJS Product Sync...")
-  console.log("=" .repeat(50))
-  
-  // Get configuration from environment
-  const odooUrl = process.env.ODOO_URL || "https://oskarllc-new-27289548.dev.odoo.com"
-  const odooDb = process.env.ODOO_DB_NAME || "oskarllc-new-27289548"
-  const odooUsername = process.env.ODOO_USERNAME || "SYG"
-  const odooPassword = process.env.ODOO_PASSWORD || "S123456"
-  
-  console.log(`📡 Odoo URL: ${odooUrl}`)
-  console.log(`📁 Database: ${odooDb}`)
-  console.log(`👤 Username: ${odooUsername}`)
-  
-  // Authenticate with Odoo
-  console.log("\n1️⃣ Authenticating with Odoo...")
-  
+  console.log("\n\ud83d\udd04 Odoo -> MedusaJS Full Sync v3")
+  console.log("=".repeat(55))
+
+  const odooUrl = process.env.ODOO_URL || ""
+  const odooDb = process.env.ODOO_DB_NAME || ""
+  const odooUsername = process.env.ODOO_USERNAME || ""
+  const odooPassword = process.env.ODOO_PASSWORD || process.env.ODOO_API_KEY || ""
+
+  if (!odooUrl || !odooDb || !odooUsername || !odooPassword) {
+    console.error("Missing ODOO_URL, ODOO_DB_NAME, ODOO_USERNAME, ODOO_PASSWORD in .env")
+    return
+  }
+
+  console.log(`Odoo: ${odooUrl}  DB: ${odooDb}  User: ${odooUsername}`)
+
+  // 1. Authenticate
+  console.log("\n1. Authenticating...")
   let uid: number
   try {
-    const authResponse = await axios.post(`${odooUrl}/jsonrpc`, {
-      jsonrpc: "2.0",
-      method: "call",
-      params: {
-        service: "common",
-        method: "authenticate",
-        args: [odooDb, odooUsername, odooPassword, {}]
-      },
-      id: 1
-    })
-    
-    uid = authResponse.data.result
+    const r = await axios.post(`${odooUrl}/jsonrpc`, {
+      jsonrpc: "2.0", method: "call",
+      params: { service: "common", method: "authenticate", args: [odooDb, odooUsername, odooPassword, {}] },
+      id: 1,
+    }, { timeout: 15000 })
+    uid = r.data.result
     if (!uid) {
-      console.error("❌ Authentication failed - no UID returned")
+      console.error("Authentication failed - Odoo returned:", uid)
+      console.error("Ask Odoo developer to verify credentials / API key")
       return
     }
-    console.log(`✅ Authenticated successfully (UID: ${uid})`)
-  } catch (error: any) {
-    console.error("❌ Authentication failed:", error.message)
+    console.log(`Authenticated (UID: ${uid})`)
+  } catch (e: any) {
+    console.error("Auth failed:", e.message)
     return
   }
-  
-  // Fetch products from Odoo
-  console.log("\n2️⃣ Fetching products from Odoo...")
-  
-  let odooProducts: OdooProduct[] = []
-  try {
-    const productsResponse = await axios.post(`${odooUrl}/jsonrpc`, {
-      jsonrpc: "2.0",
-      method: "call",
-      params: {
-        service: "object",
-        method: "execute_kw",
-        args: [
-          odooDb,
-          uid,
-          odooPassword,
-          "product.product",
-          "search_read",
-          [[["active", "=", true]]],
-          {
-            fields: [
-              "id", "name", "default_code", "list_price", 
-              "description_sale", "categ_id", "image_1920",
-              "barcode", "qty_available", "active"
-            ],
-            limit: 500
-          }
-        ]
-      },
-      id: 2
-    })
-    
-    odooProducts = productsResponse.data.result || []
-    console.log(`✅ Found ${odooProducts.length} active products in Odoo`)
-  } catch (error: any) {
-    console.error("❌ Failed to fetch products:", error.message)
-    return
+
+  let reqId = 1
+  async function odooCall(model: string, method: string, args: any[], kwargs: any = {}): Promise<any> {
+    const r = await axios.post(`${odooUrl}/jsonrpc`, {
+      jsonrpc: "2.0", method: "call",
+      params: { service: "object", method: "execute_kw", args: [odooDb, uid, odooPassword, model, method, args, kwargs] },
+      id: ++reqId,
+    }, { timeout: 120000 })
+    if (r.data.error) throw new Error(r.data.error.message || r.data.error.data?.message || "Odoo error")
+    return r.data.result
   }
-  
-  // Get services from container
-  const productModuleService = container.resolve("product")
-  const inventoryModuleService = container.resolve("inventory")
-  const salesChannelService = container.resolve("sales_channel")
-  
-  // Get existing products with odoo_id
-  console.log("\n3️⃣ Checking existing products in MedusaJS...")
-  
-  const existingProducts = await productModuleService.listProducts({}, {
-    select: ["id", "handle", "metadata"],
-    take: 1000
-  })
-  
-  const existingOdooIds = new Set<number>()
+
+  // 2. Count products
+  console.log("\n2. Counting Odoo products...")
+  const totalCount = await odooCall("product.template", "search_count", [[["active", "=", true], ["sale_ok", "=", true]]])
+  console.log(`Total active saleable products in Odoo: ${totalCount}`)
+
+  // 3. Fetch ALL products
+  console.log(`\n3. Fetching products (page size: ${PAGE_SIZE})...`)
+  const fields = [
+    "id", "name", "default_code", "barcode",
+    "list_price", "compare_list_price",
+    "description_sale", "categ_id", "brand_id", "x_studio_brand_1",
+    "weight", "qty_available", "is_published", "website_url",
+  ]
+
+  interface OdooProduct {
+    id: number; name: string; default_code: string | false; barcode: string | false
+    list_price: number; compare_list_price: number
+    description_sale: string | false; categ_id: [number, string] | false
+    brand_id: [number, string] | false; x_studio_brand_1: string | false
+    weight: number; qty_available: number; is_published: boolean
+    website_url: string | false
+  }
+
+  const allProducts: OdooProduct[] = []
+  let offset = 0
+  while (offset < totalCount) {
+    const batch = await odooCall("product.template", "search_read",
+      [[["active", "=", true], ["sale_ok", "=", true]]],
+      { fields, limit: PAGE_SIZE, offset, order: "id asc" }
+    )
+    allProducts.push(...batch)
+    offset += PAGE_SIZE
+    if (offset < totalCount) process.stdout.write(`  Fetched ${allProducts.length}/${totalCount}...\r`)
+  }
+  console.log(`Fetched ${allProducts.length} products from Odoo`)
+
+  // 4. Prepare MedusaJS DB
+  const pg = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+
+  const existRes = await pg.raw(`SELECT id, handle, metadata->>'odoo_id' as odoo_id FROM product WHERE deleted_at IS NULL`)
+  const existingByOdooId = new Map<string, { id: string; handle: string }>()
   const existingHandles = new Set<string>()
-  
-  for (const product of existingProducts) {
-    existingHandles.add(product.handle)
-    if (product.metadata?.odoo_id) {
-      existingOdooIds.add(Number(product.metadata.odoo_id))
-    }
+  for (const row of existRes.rows || []) {
+    if (row.odoo_id) existingByOdooId.set(String(row.odoo_id), { id: row.id, handle: row.handle })
+    existingHandles.add(row.handle)
   }
-  
-  console.log(`📊 Existing products: ${existingProducts.length}`)
-  console.log(`📊 Already synced from Odoo: ${existingOdooIds.size}`)
-  
-  // Find new products to sync
-  const newProducts = odooProducts.filter(p => !existingOdooIds.has(p.id))
-  console.log(`📊 New products to sync: ${newProducts.length}`)
-  
-  if (newProducts.length === 0) {
-    console.log("\n✅ All Odoo products are already synced!")
-    return
-  }
-  
-  // Get default sales channel
-  const salesChannels = await salesChannelService.listSalesChannels({})
-  const defaultSalesChannel = salesChannels[0]
-  
-  if (!defaultSalesChannel) {
-    console.error("❌ No sales channel found!")
-    return
-  }
-  console.log(`📢 Sales Channel: ${defaultSalesChannel.name}`)
-  
-  // Sync new products
-  console.log("\n4️⃣ Syncing new products...")
-  
-  let syncedCount = 0
-  let skippedCount = 0
-  let errorCount = 0
-  
-  for (const odooProduct of newProducts) {
+
+  const skuRes = await pg.raw(`SELECT pv.sku, p.id as product_id FROM product_variant pv JOIN product p ON p.id = pv.product_id WHERE pv.sku IS NOT NULL AND pv.sku != '' AND p.deleted_at IS NULL AND pv.deleted_at IS NULL`)
+  const existingBySku = new Map<string, string>()
+  for (const row of skuRes.rows || []) existingBySku.set(row.sku.trim(), row.product_id)
+
+  const scRes = await pg.raw(`SELECT id FROM sales_channel WHERE deleted_at IS NULL LIMIT 1`)
+  const salesChannelId = scRes.rows?.[0]?.id || null
+
+  console.log(`Existing in MedusaJS: ${existRes.rows?.length || 0} products`)
+  console.log(`Sales Channel: ${salesChannelId}`)
+
+  // 5. Sync
+  console.log(`\n4. Syncing ${allProducts.length} products...`)
+  let created = 0, updated = 0, errors = 0
+
+  for (let i = 0; i < allProducts.length; i++) {
+    const p = allProducts[i]
+    const sku = (p.default_code || `ODOO-${p.id}`).toString().trim()
+    const odooIdStr = String(p.id)
+
     try {
-      // Generate unique handle
-      let baseHandle = odooProduct.name
-        .toLowerCase()
-        .replace(/[^a-z0-9\s-]/g, "")
-        .replace(/\s+/g, "-")
-        .substring(0, 50)
-      
-      let handle = baseHandle
-      let suffix = 1
-      while (existingHandles.has(handle)) {
-        handle = `${baseHandle}-${odooProduct.id}`
-        if (existingHandles.has(handle)) {
-          handle = `${baseHandle}-${suffix++}`
+      const brand = p.brand_id && Array.isArray(p.brand_id) ? p.brand_id[1]
+        : (p.x_studio_brand_1 || null)
+      const category = p.categ_id && Array.isArray(p.categ_id) ? p.categ_id[1] : null
+      const status = p.is_published === false ? "draft" : "published"
+
+      const metadata = JSON.stringify({
+        odoo_id: p.id, odoo_sku: sku, odoo_barcode: p.barcode || null,
+        odoo_category: category, odoo_brand: brand,
+        odoo_qty: p.qty_available || 0, synced_at: new Date().toISOString(),
+      })
+
+      const imageUrl = p.website_url ? `${odooUrl}/web/image/product.template/${p.id}/image_1920` : null
+      const existingByOdoo = existingByOdooId.get(odooIdStr)
+      const existingProdId = existingByOdoo?.id || existingBySku.get(sku)
+
+      if (existingProdId) {
+        await pg.raw(
+          `UPDATE product SET title=?, description=?, status=?, weight=?, metadata=?, thumbnail=COALESCE(?,thumbnail), updated_at=NOW() WHERE id=?`,
+          [p.name, p.description_sale || "", status, p.weight ? String(p.weight) : null, metadata, imageUrl, existingProdId]
+        )
+        const vr = await pg.raw(
+          `SELECT pvps.price_set_id FROM product_variant pv JOIN product_variant_price_set pvps ON pvps.variant_id=pv.id WHERE pv.product_id=? AND pv.deleted_at IS NULL LIMIT 1`,
+          [existingProdId]
+        )
+        if (vr.rows?.length > 0 && p.list_price > 0) {
+          const rawAmt = JSON.stringify({ value: String(p.list_price), precision: 20 })
+          await pg.raw(`UPDATE price SET amount=?, raw_amount=?, updated_at=NOW() WHERE price_set_id=? AND deleted_at IS NULL`, [p.list_price, rawAmt, vr.rows[0].price_set_id])
         }
-      }
-      
-      // Generate unique SKU
-      const sku = odooProduct.default_code || `ODOO-${odooProduct.id}`
-      
-      // Prepare product data
-      const productData: any = {
-        title: odooProduct.name,
-        handle: handle,
-        description: odooProduct.description_sale || `Imported from Odoo: ${odooProduct.name}`,
-        status: "published",
-        metadata: {
-          odoo_id: odooProduct.id,
-          odoo_category: odooProduct.categ_id ? odooProduct.categ_id[1] : null,
-          odoo_barcode: odooProduct.barcode || null,
-          synced_at: new Date().toISOString()
-        },
-        options: [
-          {
-            title: "Default",
-            values: ["Default"]
-          }
-        ],
-        variants: [
-          {
-            title: "Default",
-            sku: sku,
-            prices: [
-              {
-                amount: Math.round(odooProduct.list_price * 1000), // KWD uses 3 decimal places (fils)
-                currency_code: "kwd"
-              }
-            ],
-            options: {
-              Default: "Default"
-            },
-            manage_inventory: true
-          }
-        ]
-      }
-      
-      // Add image if available
-      if (odooProduct.image_1920) {
-        productData.images = [
-          {
-            url: `data:image/jpeg;base64,${odooProduct.image_1920}`
-          }
-        ]
-      }
-      
-      // Create product
-      const createdProducts = await productModuleService.createProducts(productData)
-      const createdProduct = Array.isArray(createdProducts) ? createdProducts[0] : createdProducts
-      existingHandles.add(handle)
-      
-      // Assign to sales channel
-      try {
-        const productLink = container.resolve("link")
-        await productLink.create({
-          product_sales_channel: {
-            product_id: createdProduct.id,
-            sales_channel_id: defaultSalesChannel.id
-          }
-        })
-      } catch (linkError) {
-        // Link might already exist
-      }
-      
-      syncedCount++
-      console.log(`  ✅ ${syncedCount}. ${odooProduct.name} (SKU: ${sku})`)
-      
-    } catch (error: any) {
-      if (error.message?.includes("already exists") || error.message?.includes("duplicate")) {
-        skippedCount++
-        console.log(`  ⏭️  Skipped: ${odooProduct.name} (already exists)`)
+        updated++
       } else {
-        errorCount++
-        console.log(`  ❌ Error: ${odooProduct.name} - ${error.message}`)
+        let handle = slugify(p.name) || `odoo-${p.id}`
+        if (existingHandles.has(handle)) handle = `${handle}-${p.id}`
+        if (existingHandles.has(handle)) handle = `${handle}-${Date.now().toString(36)}`
+        existingHandles.add(handle)
+
+        const productId = genId("prod")
+        await pg.raw(
+          `INSERT INTO product (id,title,handle,description,thumbnail,status,weight,metadata,discountable,is_giftcard,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,true,false,NOW(),NOW())`,
+          [productId, p.name, handle, p.description_sale || "", imageUrl, status, p.weight ? String(p.weight) : null, metadata]
+        )
+
+        const variantId = genId("variant")
+        await pg.raw(
+          `INSERT INTO product_variant (id,product_id,title,sku,barcode,manage_inventory,allow_backorder,variant_rank,created_at,updated_at) VALUES (?,?,'Default',?,?,true,false,0,NOW(),NOW())`,
+          [variantId, productId, sku, p.barcode || null]
+        )
+
+        if (p.list_price > 0) {
+          const psid = genId("pset")
+          await pg.raw(`INSERT INTO price_set (id,created_at,updated_at) VALUES (?,NOW(),NOW())`, [psid])
+          await pg.raw(`INSERT INTO product_variant_price_set (id,variant_id,price_set_id,created_at,updated_at) VALUES (?,?,?,NOW(),NOW())`, [genId("pvps"), variantId, psid])
+          const rawAmt = JSON.stringify({ value: String(p.list_price), precision: 20 })
+          await pg.raw(`INSERT INTO price (id,price_set_id,currency_code,amount,raw_amount,rules_count,created_at,updated_at) VALUES (?,?,?,?,?,0,NOW(),NOW())`, [genId("price"), psid, CURRENCY, p.list_price, rawAmt])
+        }
+
+        if (imageUrl) {
+          await pg.raw(`INSERT INTO image (id,url,rank,product_id,created_at,updated_at) VALUES (?,?,0,?,NOW(),NOW())`, [genId("img"), imageUrl, productId])
+        }
+
+        if (salesChannelId) {
+          try { await pg.raw(`INSERT INTO product_sales_channel (id,product_id,sales_channel_id,created_at,updated_at) VALUES (?,?,?,NOW(),NOW()) ON CONFLICT (product_id,sales_channel_id) DO NOTHING`, [genId("psc"), productId, salesChannelId]) } catch {}
+        }
+
+        existingByOdooId.set(odooIdStr, { id: productId, handle })
+        existingBySku.set(sku, productId)
+        created++
       }
+
+      if ((created + updated) % 100 === 0 || i === allProducts.length - 1) {
+        process.stdout.write(`  Progress: ${i + 1}/${allProducts.length} (created: ${created}, updated: ${updated})\r`)
+      }
+    } catch (err: any) {
+      errors++
+      if (errors <= 15) console.error(`\n  Error [${sku}] ${err.message}`)
     }
   }
-  
-  // Summary
-  console.log("\n" + "=" .repeat(50))
-  console.log("📊 SYNC SUMMARY")
-  console.log("=" .repeat(50))
-  console.log(`✅ Products synced: ${syncedCount}`)
-  console.log(`⏭️  Products skipped: ${skippedCount}`)
-  console.log(`❌ Errors: ${errorCount}`)
-  console.log(`📦 Total Odoo products: ${odooProducts.length}`)
-  console.log(`📦 Total in MedusaJS: ${existingProducts.length + syncedCount}`)
-  console.log("\n✅ Odoo sync completed!")
+
+  const finalRes = await pg.raw(`SELECT COUNT(*) as c FROM product WHERE status='published' AND deleted_at IS NULL`)
+  console.log(`\n\n${"=".repeat(55)}`)
+  console.log("SYNC SUMMARY")
+  console.log(`${"=".repeat(55)}`)
+  console.log(`Created:  ${created}`)
+  console.log(`Updated:  ${updated}`)
+  console.log(`Errors:   ${errors}`)
+  console.log(`Odoo total:      ${allProducts.length}`)
+  console.log(`MedusaJS total:  ${finalRes.rows?.[0]?.c || "?"}`)
+  console.log("=".repeat(55))
+  console.log("Sync complete!\n")
 }

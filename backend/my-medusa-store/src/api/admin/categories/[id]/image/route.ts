@@ -11,7 +11,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
 
   try {
     const result = await pgConnection.raw(
-      `SELECT id, name, handle, metadata FROM product_category WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT id, name, handle, metadata FROM product_category WHERE id = ? AND deleted_at IS NULL`,
       [id]
     );
 
@@ -61,7 +61,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     // Check if category exists
     const existing = await pgConnection.raw(
-      `SELECT id, name, handle, metadata FROM product_category WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT id, name, handle, metadata FROM product_category WHERE id = ? AND deleted_at IS NULL`,
       [id]
     );
 
@@ -81,7 +81,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
 
     // Update metadata
     await pgConnection.raw(
-      `UPDATE product_category SET metadata = $1, updated_at = NOW() WHERE id = $2`,
+      `UPDATE product_category SET metadata = ?, updated_at = NOW() WHERE id = ?`,
       [JSON.stringify(newMetadata), id]
     );
 
@@ -115,7 +115,7 @@ export const DELETE = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     // Check if category exists
     const existing = await pgConnection.raw(
-      `SELECT id, metadata FROM product_category WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT id, metadata FROM product_category WHERE id = ? AND deleted_at IS NULL`,
       [id]
     );
 
@@ -132,7 +132,7 @@ export const DELETE = async (req: MedusaRequest, res: MedusaResponse) => {
 
     // Update metadata
     await pgConnection.raw(
-      `UPDATE product_category SET metadata = $1, updated_at = NOW() WHERE id = $2`,
+      `UPDATE product_category SET metadata = ?, updated_at = NOW() WHERE id = ?`,
       [JSON.stringify(currentMetadata), id]
     );
 

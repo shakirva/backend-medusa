@@ -1,4 +1,4 @@
-import { MedusaRequest, MedusaResponse, AuthenticatedMedusaRequest } from "@medusajs/framework/http"
+import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { REVIEW_MODULE } from "../../../../../modules/reviews"
 import ReviewService from "../../../../../modules/reviews/service"
 
@@ -10,21 +10,20 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   res.json({ reviews })
 }
 
-// Auth required: create a review for a product
-export const AUTHENTICATE = true
-
-export async function POST(req: AuthenticatedMedusaRequest, res: MedusaResponse) {
+// Public: create a review (no auth required)
+export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const reviewService = req.scope.resolve<ReviewService>(REVIEW_MODULE)
   const product_id = req.params.id
-  // MedusaJS 2.x uses auth_context.actor_id for authenticated customer
-  const customer_id = req.auth_context?.actor_id
-  if (!customer_id) {
-    return res.status(401).json({ message: "Unauthenticated" })
-  }
-  const { rating, title, content } = req.body as any
+  const { rating, title, content, customer_id, customer_name } = req.body as any
   if (rating == null) {
     return res.status(400).json({ message: "rating required" })
   }
-  const review = await reviewService.addReview(customer_id, product_id, Number(rating), title, content)
-  res.json({ review })
+  const review = await reviewService.addReview(
+    customer_id || null,
+    product_id,
+    Number(rating),
+    title || customer_name || "Anonymous",
+    content
+  )
+  res.json({ success: true, review })
 }

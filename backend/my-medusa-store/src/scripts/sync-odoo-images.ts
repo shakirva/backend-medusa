@@ -1,13 +1,14 @@
 import { ExecArgs } from "@medusajs/framework/types"
 import axios from "axios"
-import * as fs from "fs"
-import * as path from "path"
 
 /**
  * Sync Odoo Product Images
  * 
- * This script downloads images from Odoo and saves them locally,
- * then updates the product image URLs in MedusaJS.
+ * This script sets direct Odoo image URLs for products,
+ * instead of downloading and storing images locally.
+ * 
+ * Odoo serves images publicly at:
+ *   {ODOO_URL}/web/image/product.product/{odoo_id}/image_1920
  * 
  * Run with: yarn sync:images
  */
@@ -24,20 +25,11 @@ interface ProductWithImage {
 const ODOO_URL = process.env.ODOO_URL || "https://oskarllc-new-27289548.dev.odoo.com"
 const ODOO_DB = process.env.ODOO_DB_NAME || "oskarllc-new-27289548"
 const ODOO_USERNAME = process.env.ODOO_USERNAME || "SYG"
-const ODOO_PASSWORD = process.env.ODOO_PASSWORD || "S123456"
-
-// Image storage path
-const UPLOAD_DIR = path.join(process.cwd(), "static", "uploads", "products")
+const ODOO_PASSWORD = process.env.ODOO_API_KEY || process.env.ODOO_PASSWORD || "S123456"
 
 export default async function syncOdooImages({ container }: ExecArgs) {
-  console.log("\n🖼️  Starting Odoo Image Sync...")
+  console.log("\n🖼️  Starting Odoo Image Sync (Direct URL mode)...")
   console.log("=" .repeat(50))
-  
-  // Ensure upload directory exists
-  if (!fs.existsSync(UPLOAD_DIR)) {
-    fs.mkdirSync(UPLOAD_DIR, { recursive: true })
-    console.log(`📁 Created upload directory: ${UPLOAD_DIR}`)
-  }
   
   // Authenticate with Odoo
   console.log("\n1️⃣  Authenticating with Odoo...")
@@ -122,7 +114,7 @@ export default async function syncOdooImages({ container }: ExecArgs) {
           "search_read",
           [[["id", "in", odooIds]]],
           {
-            fields: ["id", "name", "image_1920", "image_128"],
+            fields: ["id", "name", "image_1920"],
             limit: 500
           }
         ]
@@ -138,20 +130,19 @@ export default async function syncOdooImages({ container }: ExecArgs) {
     return
   }
   
-  // Create a map of Odoo ID to image data
-  const odooImageMap = new Map<number, string>()
+  // Create a set of Odoo IDs that have images
+  const odooIdsWithImages = new Set<number>()
   for (const product of odooProducts) {
-    // Prefer image_1920 (full size), fallback to image_128 (thumbnail)
-    const imageData = product.image_1920 || product.image_128
-    if (imageData && imageData !== false) {
-      odooImageMap.set(product.id, imageData)
+    // Odoo returns image_1920 as base64 string if image exists, false if not
+    if (product.image_1920 && product.image_1920 !== false) {
+      odooIdsWithImages.add(product.id)
     }
   }
   
-  console.log(`📷 Products with images: ${odooImageMap.size}`)
+  console.log(`📷 Products with images: ${odooIdsWithImages.size}`)
   
-  // Process and save images
-  console.log("\n4️⃣  Saving images locally...")
+  // Process and set direct Odoo image URLs
+  console.log("\n4️⃣  Setting Odoo direct image URLs...")
   
   let savedCount = 0
   let errorCount = 0
@@ -161,35 +152,14 @@ export default async function syncOdooImages({ container }: ExecArgs) {
     const odooId = product.metadata?.odoo_id
     if (!odooId) continue
     
-    const base64Image = odooImageMap.get(odooId)
-    
-    if (!base64Image) {
+    if (!odooIdsWithImages.has(odooId)) {
       noImageCount++
       continue
     }
     
     try {
-      // Decode base64 and save to file
-      const imageBuffer = Buffer.from(base64Image, "base64")
-      
-      // Determine file extension (usually JPEG from Odoo)
-      // Check magic bytes
-      let extension = "jpg"
-      if (imageBuffer[0] === 0x89 && imageBuffer[1] === 0x50) {
-        extension = "png"
-      } else if (imageBuffer[0] === 0x47 && imageBuffer[1] === 0x49) {
-        extension = "gif"
-      }
-      
-      // Create filename
-      const filename = `odoo-${odooId}.${extension}`
-      const filePath = path.join(UPLOAD_DIR, filename)
-      
-      // Save file
-      fs.writeFileSync(filePath, imageBuffer)
-      
-      // Create image URL (relative to static folder)
-      const imageUrl = `/static/uploads/products/${filename}`
+      // Use Odoo's direct public image URL instead of downloading
+      const imageUrl = `${ODOO_URL}/web/image/product.product/${odooId}/image_1920`
       
       // Insert image record into database
       const imageId = `img_odoo_${odooId}_${Date.now()}`
@@ -199,15 +169,21 @@ export default async function syncOdooImages({ container }: ExecArgs) {
          ON CONFLICT DO NOTHING`,
         [imageId, product.id, imageUrl]
       )
+
+      // Also update the product thumbnail
+      await pool.query(
+        `UPDATE product SET thumbnail = $1, updated_at = NOW() WHERE id = $2 AND (thumbnail IS NULL OR thumbnail LIKE '/static/%' OR thumbnail LIKE 'http://localhost%')`,
+        [imageUrl, product.id]
+      )
       
       savedCount++
       if (savedCount % 20 === 0) {
-        console.log(`  ✅ Saved ${savedCount} images...`)
+        console.log(`  ✅ Set ${savedCount} image URLs...`)
       }
       
     } catch (error: any) {
       errorCount++
-      console.log(`  ❌ Error saving image for ${product.title}: ${error.message}`)
+      console.log(`  ❌ Error setting image for ${product.title}: ${error.message}`)
     }
   }
   
@@ -218,9 +194,9 @@ export default async function syncOdooImages({ container }: ExecArgs) {
   console.log("\n" + "=" .repeat(50))
   console.log("📊 IMAGE SYNC SUMMARY")
   console.log("=" .repeat(50))
-  console.log(`✅ Images saved: ${savedCount}`)
+  console.log(`✅ Image URLs set: ${savedCount}`)
   console.log(`📷 No image in Odoo: ${noImageCount}`)
   console.log(`❌ Errors: ${errorCount}`)
-  console.log(`📁 Location: ${UPLOAD_DIR}`)
+  console.log(`� URL pattern: ${ODOO_URL}/web/image/product.product/{id}/image_1920`)
   console.log("\n✅ Image sync completed!")
 }

@@ -70,6 +70,16 @@
           "default": "true",
           "mappedType": "boolean"
         },
+        "is_special": {
+          "name": "is_special",
+          "type": "boolean",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "default": "false",
+          "mappedType": "boolean"
+        },
         "meta_title": {
           "name": "meta_title",
           "type": "text",

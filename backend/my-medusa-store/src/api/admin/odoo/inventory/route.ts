@@ -29,8 +29,8 @@ export async function GET(
 
     // Group inventory by product
     const inventoryByProduct = inventory.reduce((acc, quant) => {
-      const productId = quant.product_id[0]
-      const productName = quant.product_id[1]
+      const productId = (quant.product_id as any)[0]
+      const productName = (quant.product_id as any)[1]
       
       if (!acc[productId]) {
         acc[productId] = {
@@ -48,8 +48,8 @@ export async function GET(
       acc[productId].available_quantity +=
         quant.quantity - quant.reserved_quantity
       acc[productId].locations.push({
-        location_id: quant.location_id[0],
-        location_name: quant.location_id[1],
+        location_id: (quant.location_id as any)[0],
+        location_name: (quant.location_id as any)[1],
         quantity: quant.quantity,
         reserved: quant.reserved_quantity,
       })

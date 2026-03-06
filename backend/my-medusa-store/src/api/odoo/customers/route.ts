@@ -25,20 +25,19 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     let whereClause = "WHERE 1=1";
     const params: any[] = [];
-    let paramIndex = 1;
 
     if (created_after) {
-      whereClause += ` AND c.created_at >= $${paramIndex++}`;
+      whereClause += ` AND c.created_at >= ?`;
       params.push(created_after);
     }
 
     if (email) {
-      whereClause += ` AND c.email ILIKE $${paramIndex++}`;
+      whereClause += ` AND c.email ILIKE ?`;
       params.push(`%${email}%`);
     }
 
     if (phone) {
-      whereClause += ` AND c.phone ILIKE $${paramIndex++}`;
+      whereClause += ` AND c.phone ILIKE ?`;
       params.push(`%${phone}%`);
     }
 
@@ -64,7 +63,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
        FROM customer c
        ${whereClause}
        ORDER BY c.created_at DESC
-       LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+       LIMIT ? OFFSET ?`,
       [...params, parseInt(limit as string), parseInt(offset as string)]
     );
 
@@ -87,22 +86,25 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             a.is_default_shipping,
             a.is_default_billing
            FROM customer_address a
-           WHERE a.customer_id = $1`,
+           WHERE a.customer_id = ?`,
           [customer.id]
         );
 
         // Get order count
         const orderCountResult = await pgConnection.raw(
-          `SELECT COUNT(*) as count FROM "order" WHERE customer_id = $1`,
+          `SELECT COUNT(*) as count FROM "order" WHERE customer_id = ?`,
           [customer.id]
         );
 
-        // Get total spent
+        // Get total spent (MedusaJS 2.x: order_item has quantity, order_line_item has unit_price)
         const totalSpentResult = await pgConnection.raw(
           `SELECT COALESCE(SUM(
-            (SELECT SUM(li.unit_price * li.quantity) FROM order_line_item li WHERE li.order_id = o.id)
+            (SELECT SUM(li.unit_price * oi.quantity) 
+             FROM order_item oi 
+             JOIN order_line_item li ON oi.item_id = li.id 
+             WHERE oi.order_id = o.id)
            ), 0) as total
-           FROM "order" o WHERE o.customer_id = $1`,
+           FROM "order" o WHERE o.customer_id = ?`,
           [customer.id]
         );
 

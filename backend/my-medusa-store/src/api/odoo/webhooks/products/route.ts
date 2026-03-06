@@ -1,431 +1,277 @@
-import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils";
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 
 /**
  * POST /odoo/webhooks/products
- * Webhook for Odoo to push product updates to Medusa
- * Receives ALL product fields from Odoo and syncs to MedusaJS
+ * 
+ * SELF-CONTAINED webhook - Odoo pushes ALL product data directly.
+ * No callback to Odoo needed. Works even if Odoo credentials change.
+ * 
+ * Images use direct Odoo URLs instead of downloading/storing locally.
+ * 
+ * Supports single + bulk operations.
  */
 
-// Comprehensive Odoo Product type with all 200+ fields
-export interface OdooProduct {
-  odoo_id: number;
-  name: string;
-  sku?: string;
-  barcode?: string;
-  description?: string;
-  list_price?: number;
-  standard_price?: number;
-  qty_available?: number;
-  category_id?: number;
-  category_name?: string;
-  brand_id?: number;
-  brand_name?: string;
-  model?: string;
-  specifications?: Record<string, any>;
-  features?: string[];
-  dimensions?: string;
-  weight?: number;
-  capacity?: string;
-  color?: string;
-  screen_size?: string;
-  cpu_type?: string;
-  ram?: string;
-  storage?: string;
-  battery_capacity?: string;
-  front_camera?: string;
-  rear_camera?: string;
-  operating_system?: string;
-  image_1920?: string;
-  image_1024?: string;
-  image_512?: string;
-  images?: string[];
-  thumbnail_url?: string;
-  seller_name?: string;
-  warranty?: string;
-  warranty_months?: number;
-  delivery_days?: number;
-  return_days?: number;
-  return_policy?: string;
-  rating?: number;
-  reviews_count?: number;
-  is_bestseller?: boolean;
-  is_new?: boolean;
-  active?: boolean;
-  virtual_available?: number;
-  stock_status?: string;
-  currency?: string;
-  discount_percentage?: number;
-  warranty_type?: string;
-  shipping_class?: string;
-  tax_name?: string;
-  tax_percentage?: number;
-  seo_title?: string;
-  seo_description?: string;
-  meta_keywords?: string;
-  is_sale?: boolean;
-  is_featured?: boolean;
-  material?: string;
-  [key: string]: any;
+const WEBHOOK_SECRET = process.env.ODOO_WEBHOOK_SECRET || "marqa-odoo-webhook-2026"
+const ODOO_BASE_URL = process.env.ODOO_URL || "https://oskarllc-new-27289548.dev.odoo.com"
+
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").replace(/(^-|-$)/g, "").substring(0, 100)
+}
+
+function genId(prefix: string): string {
+  const c = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+  let id = prefix + "_"
+  for (let i = 0; i < 26; i++) id += c[Math.floor(Math.random() * c.length)]
+  return id
+}
+
+/**
+ * Generate direct Odoo image URL for a product
+ */
+function getOdooImageUrl(odooId: number): string {
+  return `${ODOO_BASE_URL}/web/image/product.product/${odooId}/image_1920`
+}
+
+interface OdooProductPayload {
+  odoo_id: number
+  name: string
+  default_code?: string
+  barcode?: string
+  list_price?: number
+  compare_list_price?: number
+  currency_code?: string
+  description_sale?: string
+  description?: string
+  categ_id?: [number, string] | false
+  brand?: string
+  weight?: number
+  image_url?: string
+  image_1920?: string
+  images?: string[]
+  qty_available?: number
+  is_published?: boolean
+  [key: string]: any
+}
+
+async function upsertProduct(
+  pg: any,
+  p: OdooProductPayload,
+  salesChannelId: string | null,
+  existingHandles: Set<string>
+): Promise<{ action: string; productId: string }> {
+  const odooId = p.odoo_id
+  const sku = p.default_code || `ODOO-${odooId}`
+  const title = p.name || `Odoo Product ${odooId}`
+  const price = p.list_price || 0
+  const currency = (p.currency_code || "aed").toLowerCase()
+  const description = p.description_sale || p.description || ""
+  const weight = p.weight ? String(p.weight) : null
+  const status = p.is_published === false ? "draft" : "published"
+  const brand = p.brand || null
+  const category = p.categ_id && Array.isArray(p.categ_id) ? p.categ_id[1] : null
+
+  const metadata = {
+    odoo_id: odooId,
+    odoo_sku: sku,
+    odoo_barcode: p.barcode || null,
+    odoo_category: category,
+    odoo_brand: brand,
+    odoo_qty: p.qty_available || 0,
+    synced_at: new Date().toISOString(),
+  }
+
+  // Check if product exists by odoo_id or SKU
+  const existing = await pg.raw(
+    `SELECT id, handle FROM product WHERE metadata->>'odoo_id' = ? AND deleted_at IS NULL LIMIT 1`,
+    [String(odooId)]
+  )
+  const existBySku = existing.rows?.length
+    ? existing
+    : await pg.raw(
+        `SELECT p.id, p.handle FROM product p JOIN product_variant pv ON pv.product_id = p.id WHERE pv.sku = ? AND p.deleted_at IS NULL AND pv.deleted_at IS NULL LIMIT 1`,
+        [sku]
+      )
+
+  if (existBySku.rows?.length > 0) {
+    const prodId = existBySku.rows[0].id
+    await pg.raw(
+      `UPDATE product SET title=?, description=?, status=?, weight=?, metadata=?, thumbnail=COALESCE(?, thumbnail), updated_at=NOW() WHERE id=?`,
+      [title, description, status, weight, JSON.stringify(metadata), p.image_url || null, prodId]
+    )
+    const varRes = await pg.raw(
+      `SELECT pv.id as vid, pvps.price_set_id as psid FROM product_variant pv LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id WHERE pv.product_id = ? AND pv.deleted_at IS NULL LIMIT 1`,
+      [prodId]
+    )
+    if (varRes.rows?.length > 0 && varRes.rows[0].psid && price > 0) {
+      const rawAmount = JSON.stringify({ value: String(price), precision: 20 })
+      await pg.raw(
+        `UPDATE price SET amount=?, raw_amount=?, currency_code=?, updated_at=NOW() WHERE price_set_id=? AND deleted_at IS NULL`,
+        [price, rawAmount, currency, varRes.rows[0].psid]
+      )
+    }
+    return { action: "updated", productId: prodId }
+  }
+
+  // CREATE new product
+  let handle = slugify(title)
+  if (!handle) handle = `odoo-${odooId}`
+  if (existingHandles.has(handle)) handle = `${handle}-${odooId}`
+  if (existingHandles.has(handle)) handle = `${handle}-${Date.now().toString(36)}`
+  existingHandles.add(handle)
+
+  let thumbnail: string | null = p.image_url || null
+  if (!thumbnail && (p.image_1920 || p.odoo_id)) {
+    // Use direct Odoo image URL instead of saving base64 locally
+    thumbnail = getOdooImageUrl(odooId)
+  }
+
+  const productId = genId("prod")
+  await pg.raw(
+    `INSERT INTO product (id, title, handle, subtitle, description, thumbnail, status, weight, metadata, discountable, is_giftcard, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true, false, NOW(), NOW())`,
+    [productId, title, handle, brand || "", description, thumbnail, status, weight, JSON.stringify(metadata)]
+  )
+
+  const variantId = genId("variant")
+  await pg.raw(
+    `INSERT INTO product_variant (id, product_id, title, sku, barcode, manage_inventory, allow_backorder, variant_rank, created_at, updated_at) VALUES (?, ?, 'Default', ?, ?, true, false, 0, NOW(), NOW())`,
+    [variantId, productId, sku, p.barcode || null]
+  )
+
+  if (price > 0) {
+    const priceSetId = genId("pset")
+    await pg.raw(`INSERT INTO price_set (id, created_at, updated_at) VALUES (?, NOW(), NOW())`, [priceSetId])
+    await pg.raw(
+      `INSERT INTO product_variant_price_set (id, variant_id, price_set_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())`,
+      [genId("pvps"), variantId, priceSetId]
+    )
+    const rawAmount = JSON.stringify({ value: String(price), precision: 20 })
+    await pg.raw(
+      `INSERT INTO price (id, price_set_id, currency_code, amount, raw_amount, rules_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, NOW(), NOW())`,
+      [genId("price"), priceSetId, currency, price, rawAmount]
+    )
+  }
+
+  if (thumbnail) {
+    await pg.raw(
+      `INSERT INTO image (id, url, rank, product_id, created_at, updated_at) VALUES (?, ?, 0, ?, NOW(), NOW())`,
+      [genId("img"), thumbnail, productId]
+    )
+  }
+  if (p.images && Array.isArray(p.images)) {
+    for (let idx = 0; idx < p.images.length; idx++) {
+      await pg.raw(
+        `INSERT INTO image (id, url, rank, product_id, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())`,
+        [genId("img"), p.images[idx], idx + 1, productId]
+      )
+    }
+  }
+
+  if (salesChannelId) {
+    try {
+      await pg.raw(
+        `INSERT INTO product_sales_channel (id, product_id, sales_channel_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW()) ON CONFLICT (product_id, sales_channel_id) DO NOTHING`,
+        [genId("psc"), productId, salesChannelId]
+      )
+    } catch { /* ignore */ }
+  }
+
+  return { action: "created", productId }
 }
 
 export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
-  const pgConnection = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION);
+  const pg = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+  const startTime = Date.now()
+  const body = req.body as any
+  const { event_type, webhook_secret } = body
 
-  const {
-    event_type,
-    product,
-  } = req.body as {
-    event_type: "product.created" | "product.updated" | "product.deleted";
-    product: OdooProduct;
-  };
-
-  // Validate required fields
-  if (!event_type || !product || !product.name) {
-    return res.status(400).json({
-      type: "invalid_data",
-      message: "event_type, product, and product.name are required",
-    });
+  if (WEBHOOK_SECRET && webhook_secret !== WEBHOOK_SECRET) {
+    return res.status(401).json({ type: "unauthorized", message: "Invalid webhook_secret" })
+  }
+  if (!event_type) {
+    return res.status(400).json({ type: "invalid_data", message: "event_type is required" })
   }
 
-  console.log(`[Odoo Webhook] Received ${event_type} for product: ${product.name} (Odoo ID: ${product.odoo_id})`);
+  console.log(`[Odoo Webhook] ${event_type} received`)
 
   try {
-    // Handle different event types
-    switch (event_type) {
-      case "product.created":
-      case "product.updated": {
-        // Find existing product by SKU or Odoo ID
-        const existingVariant = await pgConnection.raw(
-          `SELECT 
-            pv.id as variant_id,
-            pv.product_id,
-            p.title as product_title,
-            ii.id as inventory_item_id
-           FROM product_variant pv
-           JOIN product p ON pv.product_id = p.id
-           LEFT JOIN inventory_item ii ON ii.sku = pv.sku
-           WHERE pv.sku = $1 OR p.metadata->>'odoo_id' = $2
-           LIMIT 1`,
-          [product.sku, product.odoo_id?.toString()]
-        );
+    const scRes = await pg.raw(`SELECT id FROM sales_channel WHERE deleted_at IS NULL LIMIT 1`)
+    const salesChannelId = scRes.rows?.[0]?.id || null
+    const hRes = await pg.raw(`SELECT handle FROM product WHERE deleted_at IS NULL`)
+    const existingHandles = new Set<string>(hRes.rows?.map((r: any) => r.handle) || [])
 
-        if (existingVariant.rows && existingVariant.rows.length > 0) {
-          const variant = existingVariant.rows[0];
-
-          // Prepare comprehensive metadata
-          const metadata = {
-            // Identifiers
-            odoo_id: product.odoo_id?.toString(),
-            sku: product.sku,
-            barcode: product.barcode,
-            
-            // Pricing
-            list_price: product.list_price,
-            standard_price: product.standard_price,
-            currency: product.currency || 'KWD',
-            discount_percentage: product.discount_percentage,
-            
-            // Inventory
-            qty_available: product.qty_available,
-            virtual_available: product.virtual_available,
-            stock_status: product.stock_status || (product.qty_available && product.qty_available > 0 ? 'In Stock' : 'Out of Stock'),
-            
-            // Categorization
-            category_id: product.category_id,
-            category_name: product.category_name,
-            brand_id: product.brand_id,
-            brand_name: product.brand_name,
-            brand: product.brand_name,
-            
-            // Specifications
-            model: product.model,
-            specifications: product.specifications || {},
-            features: product.features || [],
-            dimensions: product.dimensions,
-            weight: product.weight,
-            capacity: product.capacity,
-            material: product.material,
-            color: product.color,
-            
-            // Technical Specs
-            screen_size: product.screen_size,
-            cpu_type: product.cpu_type,
-            ram: product.ram,
-            storage: product.storage,
-            battery_capacity: product.battery_capacity,
-            front_camera: product.front_camera,
-            rear_camera: product.rear_camera,
-            operating_system: product.operating_system,
-            
-            // Images
-            image_1920: product.image_1920,
-            image_1024: product.image_1024,
-            image_512: product.image_512,
-            images: product.images || [],
-            thumbnail_url: product.thumbnail_url || product.image_1920,
-            
-            // Seller & Logistics
-            seller_name: product.seller_name || 'Marka Souq',
-            warranty: product.warranty || '1 Year Warranty',
-            warranty_type: product.warranty_type,
-            warranty_months: product.warranty_months,
-            delivery_days: product.delivery_days || 2,
-            return_days: product.return_days || 45,
-            return_policy: product.return_policy,
-            shipping_class: product.shipping_class,
-            
-            // Reviews & Ratings
-            rating: product.rating || 0,
-            reviews_count: product.reviews_count || 0,
-            is_bestseller: product.is_bestseller || false,
-            
-            // Status
-            is_new: product.is_new || false,
-            is_sale: product.is_sale || false,
-            is_featured: product.is_featured || false,
-            active: product.active !== false,
-            
-            // SEO
-            seo_title: product.seo_title,
-            seo_description: product.seo_description,
-            meta_keywords: product.meta_keywords,
-            
-            // Tax & Compliance
-            tax_name: product.tax_name,
-            tax_percentage: product.tax_percentage,
-            
-            // Sync Tracking
-            last_sync: new Date().toISOString(),
-            sync_status: 'success',
-          };
-
-          // Update product with all metadata
-          await pgConnection.raw(
-            `UPDATE product 
-             SET title = $1, 
-                 description = COALESCE($2, description),
-                 metadata = metadata || $3,
-                 updated_at = NOW() 
-             WHERE id = $4`,
-            [
-              product.name,
-              product.description,
-              JSON.stringify(metadata),
-              variant.product_id
-            ]
-          );
-
-          // Update variant barcode if provided
-          if (product.barcode) {
-            await pgConnection.raw(
-              `UPDATE product_variant 
-               SET barcode = $1, updated_at = NOW() 
-               WHERE id = $2`,
-              [product.barcode, variant.variant_id]
-            );
-          }
-
-          // Update inventory if quantity provided
-          if (product.qty_available !== undefined && variant.inventory_item_id) {
-            await pgConnection.raw(
-              `UPDATE inventory_level 
-               SET stocked_quantity = $1, updated_at = NOW() 
-               WHERE inventory_item_id = $2`,
-              [product.qty_available, variant.inventory_item_id]
-            );
-          }
-
-          console.log(`[Odoo Webhook] Successfully ${event_type === 'product.created' ? 'created' : 'updated'} product: ${product.name}`);
-
-          res.json({
-            success: true,
-            action: event_type === 'product.created' ? 'created' : 'updated',
-            product: {
-              variant_id: variant.variant_id,
-              product_id: variant.product_id,
-              name: product.name,
-              odoo_id: product.odoo_id,
-              fields_synced: Object.keys(metadata).length,
-            },
-          });
-        } else {
-          // Product doesn't exist in Medusa - create tracking record
-          console.log(`[Odoo Webhook] Product "${product.name}" not found in Medusa catalog, creating tracking record`);
-
-          const inventoryItemId = `iitem_odoo_${product.odoo_id}_${Date.now()}`;
-          
-          try {
-            // Create inventory item for tracking
-            await pgConnection.raw(
-              `INSERT INTO inventory_item (id, sku, title, description, weight, created_at, updated_at)
-               VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-               ON CONFLICT (sku) DO UPDATE SET 
-                 title = EXCLUDED.title,
-                 description = EXCLUDED.description,
-                 weight = EXCLUDED.weight,
-                 updated_at = NOW()`,
-              [
-                inventoryItemId,
-                product.sku || `ODOO-${product.odoo_id}`,
-                product.name,
-                product.description,
-                product.weight
-              ]
-            );
-
-            // Get default location and create inventory level
-            if (product.qty_available !== undefined) {
-              const locationResult = await pgConnection.raw(`SELECT id FROM stock_location LIMIT 1`);
-              
-              if (locationResult.rows && locationResult.rows.length > 0) {
-                const locationId = locationResult.rows[0].id;
-                const levelId = `iloc_odoo_${product.odoo_id}_${Date.now()}`;
-
-                // Get actual inventory item id
-                const itemResult = await pgConnection.raw(
-                  `SELECT id FROM inventory_item WHERE id = $1 OR sku = $2`,
-                  [inventoryItemId, product.sku || `ODOO-${product.odoo_id}`]
-                );
-
-                if (itemResult.rows && itemResult.rows.length > 0) {
-                  await pgConnection.raw(
-                    `INSERT INTO inventory_level 
-                     (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity, incoming_quantity, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, 0, 0, NOW(), NOW())
-                     ON CONFLICT (inventory_item_id, location_id) DO UPDATE SET 
-                       stocked_quantity = EXCLUDED.stocked_quantity,
-                       updated_at = NOW()`,
-                    [levelId, itemResult.rows[0].id, locationId, product.qty_available]
-                  );
-                }
-              }
-            }
-          } catch (error) {
-            console.log(`[Odoo Webhook] Could not create inventory item (table may not exist):`, error);
-          }
-
-          res.json({
-            success: true,
-            action: "inventory_created",
-            message: "Product not found in catalog, inventory item created for future linking",
-            product: {
-              name: product.name,
-              odoo_id: product.odoo_id,
-              sku: product.sku,
-            },
-          });
-        }
-        break;
+    // DELETE
+    if (event_type === "product.deleted") {
+      const odooId = body.product?.odoo_id
+      if (!odooId) return res.status(400).json({ message: "product.odoo_id required" })
+      const found = await pg.raw(
+        `SELECT id, title FROM product WHERE metadata->>'odoo_id' = ? AND deleted_at IS NULL`,
+        [String(odooId)]
+      )
+      if (found.rows?.length > 0) {
+        await pg.raw(`UPDATE product SET deleted_at=NOW(), status='draft' WHERE id=?`, [found.rows[0].id])
+        console.log(`[Odoo Webhook] Deleted: ${found.rows[0].title}`)
+        return res.json({ status: "success", action: "deleted", id: found.rows[0].id })
       }
-
-      case "product.deleted": {
-        // We don't delete products, just mark inventory as 0
-        const inventoryItem = await pgConnection.raw(
-          `SELECT id FROM inventory_item WHERE sku = $1`,
-          [product.sku]
-        );
-
-        if (inventoryItem.rows && inventoryItem.rows.length > 0) {
-          await pgConnection.raw(
-            `UPDATE inventory_level 
-             SET stocked_quantity = 0, updated_at = NOW() 
-             WHERE inventory_item_id = $1`,
-            [inventoryItem.rows[0].id]
-          );
-        }
-
-        console.log(`[Odoo Webhook] Deleted product: ${product.name} (set inventory to 0)`);
-
-        res.json({
-          success: true,
-          action: "inventory_zeroed",
-          product: {
-            name: product.name,
-            odoo_id: product.odoo_id,
-          },
-          message: "Product inventory set to 0",
-        });
-        break;
-      }
-
-      default:
-        res.status(400).json({
-          type: "invalid_data",
-          message: `Unknown event_type: ${event_type}`,
-        });
+      return res.json({ status: "not_found", message: `No product for Odoo ID ${odooId}` })
     }
-  } catch (error: any) {
-    console.error("[Odoo Webhook] Product webhook error:", error);
-    res.status(500).json({
-      type: "server_error",
-      message: error.message,
-      product_name: product.name,
-      product_odoo_id: product.odoo_id,
-    });
-  }
-};
 
-/**
- * GET /odoo/webhooks/products
- * Health check for webhook endpoint
- */
-export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
-  res.json({
-    status: "ok",
-    endpoint: "products",
-    description: "Odoo product webhook endpoint - accepts 200+ fields",
-    supported_events: ["product.created", "product.updated", "product.deleted"],
-    fields_supported: [
-      "Core: odoo_id, sku, barcode, name, description",
-      "Pricing: list_price, standard_price, currency, discount_percentage",
-      "Inventory: qty_available, virtual_available, stock_status",
-      "Categorization: category_id, category_name, brand_id, brand_name",
-      "Specifications: model, specifications, features, dimensions, weight, capacity, color, material",
-      "Technical: screen_size, cpu_type, ram, storage, battery_capacity, camera_specs, os",
-      "Images: image_1920, image_1024, image_512, images array, thumbnail_url",
-      "Seller: seller_name, warranty, warranty_months, delivery_days, return_days, return_policy",
-      "Reviews: rating, reviews_count, is_bestseller",
-      "Status: active, is_new, is_sale, is_featured",
-      "SEO: seo_title, seo_description, meta_keywords",
-      "Tax: tax_name, tax_percentage"
-    ],
-    example_payload: {
-      event_type: "product.created",
-      product: {
-        odoo_id: 12345,
-        name: "Samsung Galaxy S25 Ultra",
-        sku: "SAMSUNG-S25-512GB-BLUE",
-        barcode: "1234567890123",
-        description: "Premium smartphone...",
-        list_price: 5999,
-        standard_price: 4200,
-        currency: "KWD",
-        qty_available: 50,
-        category_id: 15,
-        category_name: "Smartphones",
-        brand_id: 8,
-        brand_name: "Samsung",
-        model: "SM-S938BZBEAAE",
-        screen_size: "6.8 inch",
-        cpu_type: "Snapdragon 8 Gen 3",
-        ram: "12GB",
-        storage: "512GB",
-        battery_capacity: "5000mAh",
-        front_camera: "12MP",
-        rear_camera: "200MP + 50MP + 10MP + 10MP",
-        operating_system: "Android 15",
-        warranty: "1 Year Warranty",
-        warranty_months: 12,
-        delivery_days: 2,
-        return_days: 45,
-        rating: 4.8,
-        reviews_count: 326,
-        is_new: true,
-        is_bestseller: true,
-        image_1920: "https://example.com/images/s25-main.jpg",
-        images: ["https://example.com/images/s25-1.jpg", "https://example.com/images/s25-2.jpg"],
+    // BULK
+    if (event_type === "product.bulk") {
+      const products: OdooProductPayload[] = body.products || []
+      if (!products.length) return res.status(400).json({ message: "products array required" })
+      let created = 0, updated = 0, errors = 0
+      for (const p of products) {
+        try {
+          if (!p.odoo_id || !p.name) { errors++; continue }
+          const r = await upsertProduct(pg, p, salesChannelId, existingHandles)
+          if (r.action === "created") created++; else updated++
+        } catch (err: any) {
+          errors++
+          console.error(`[Odoo Webhook] Bulk err [${p.odoo_id}]: ${err.message}`)
+        }
       }
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+      console.log(`[Odoo Webhook] Bulk done: created=${created} updated=${updated} errors=${errors} (${elapsed}s)`)
+      return res.json({ status: "success", action: "bulk", created, updated, errors, total: products.length, elapsed_seconds: elapsed })
+    }
+
+    // SINGLE CREATE/UPDATE
+    const p: OdooProductPayload = body.product
+    if (!p?.odoo_id || !p?.name) {
+      return res.status(400).json({ message: "product.odoo_id and product.name are required" })
+    }
+    const result = await upsertProduct(pg, p, salesChannelId, existingHandles)
+    console.log(`[Odoo Webhook] ${result.action}: ${p.name} -> ${result.productId}`)
+    return res.json({ status: "success", ...result, odoo_id: p.odoo_id, product_name: p.name })
+
+  } catch (error: any) {
+    console.error(`[Odoo Webhook] Error:`, error.message)
+    return res.status(500).json({ type: "error", message: error.message })
+  }
+}
+
+export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
+  const pg = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+  const countRes = await pg.raw(`SELECT COUNT(*) as c FROM product WHERE status='published' AND deleted_at IS NULL`)
+  const odooCount = await pg.raw(`SELECT COUNT(*) as c FROM product WHERE metadata->>'odoo_id' IS NOT NULL AND deleted_at IS NULL`)
+
+  return res.json({
+    status: "active",
+    endpoint: "/odoo/webhooks/products",
+    total_products: parseInt(countRes.rows?.[0]?.c || "0"),
+    odoo_synced_products: parseInt(odooCount.rows?.[0]?.c || "0"),
+    supported_events: ["product.created", "product.updated", "product.deleted", "product.bulk"],
+    webhook_secret: "Required in request body",
+    example_single: {
+      event_type: "product.created",
+      webhook_secret: "<secret>",
+      product: { odoo_id: 123, name: "Product Name", default_code: "SKU-001", list_price: 99.99, currency_code: "aed", description_sale: "Description", brand: "Brand", image_url: "https://example.com/image.jpg", is_published: true },
     },
-  });
-};
+    example_bulk: {
+      event_type: "product.bulk",
+      webhook_secret: "<secret>",
+      products: ["... array of product objects ..."],
+    },
+  })
+}

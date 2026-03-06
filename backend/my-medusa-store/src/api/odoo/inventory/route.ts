@@ -25,17 +25,16 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   try {
     let whereClause = "WHERE 1=1";
     const params: any[] = [];
-    let paramIndex = 1;
 
     if (sku) {
-      whereClause += ` AND ii.sku ILIKE $${paramIndex++}`;
+      whereClause += ` AND ii.sku ILIKE ?`;
       params.push(`%${sku}%`);
     }
 
     // Low stock threshold (default 10)
     if (low_stock === "true") {
       const threshold = 10;
-      whereClause += ` AND COALESCE(il.stocked_quantity, 0) < $${paramIndex++}`;
+      whereClause += ` AND COALESCE(il.stocked_quantity, 0) < ?`;
       params.push(threshold);
     }
 
@@ -71,7 +70,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
        LEFT JOIN stock_location sl ON il.location_id = sl.id
        ${whereClause}
        ORDER BY ii.sku
-       LIMIT $${paramIndex++} OFFSET $${paramIndex++}`,
+       LIMIT ? OFFSET ?`,
       [...params, parseInt(limit as string), parseInt(offset as string)]
     );
 
@@ -92,7 +91,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
               p.handle as product_handle
              FROM product_variant pv
              JOIN product p ON pv.product_id = p.id
-             WHERE pv.sku = $1`,
+             WHERE pv.sku = ?`,
             [item.sku]
           );
 
@@ -184,7 +183,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         `SELECT ii.id, il.id as level_id, il.stocked_quantity
          FROM inventory_item ii
          LEFT JOIN inventory_level il ON il.inventory_item_id = ii.id
-         WHERE ii.sku = $1`,
+         WHERE ii.sku = ?`,
         [sku]
       );
 
@@ -199,14 +198,14 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         const newId = `iitem_odoo_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         await pgConnection.raw(
           `INSERT INTO inventory_item (id, sku, title, created_at, updated_at)
-           VALUES ($1, $2, $3, NOW(), NOW())`,
+           VALUES (?, ?, ?, NOW(), NOW())`,
           [newId, sku, title || sku]
         );
         inventoryItemId = newId;
       } else if (title) {
         // Update title if provided
         await pgConnection.raw(
-          `UPDATE inventory_item SET title = $1, updated_at = NOW() WHERE id = $2`,
+          `UPDATE inventory_item SET title = ?, updated_at = NOW() WHERE id = ?`,
           [title, inventoryItemId]
         );
       }
@@ -232,8 +231,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       if (levelId) {
         await pgConnection.raw(
           `UPDATE inventory_level 
-           SET stocked_quantity = $1, updated_at = NOW() 
-           WHERE id = $2`,
+           SET stocked_quantity = ?, updated_at = NOW() 
+           WHERE id = ?`,
           [quantity, levelId]
         );
       } else {
@@ -241,7 +240,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
         await pgConnection.raw(
           `INSERT INTO inventory_level 
            (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity, incoming_quantity, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, 0, 0, NOW(), NOW())`,
+           VALUES (?, ?, ?, ?, 0, 0, NOW(), NOW())`,
           [newLevelId, inventoryItemId, locationId, quantity]
         );
       }
