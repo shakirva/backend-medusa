@@ -86,6 +86,25 @@ async function adminMultipartGuard(
   }
 }
 
+// Middleware to remap Flutter's price_asc / price_desc sort params to valid
+// Medusa sort fields. Medusa v2 does not support ordering by price directly
+// on the product list endpoint — it only supports fields that exist on the
+// Product entity (e.g. created_at, title). Sending price_asc/price_desc
+// causes a 500 "not existing property" crash, so we remap them here.
+function remapPriceSortParam(
+  req: MedusaRequest,
+  _res: MedusaResponse,
+  next: MedusaNextFunction
+) {
+  const order = req.query.order as string | undefined
+  if (order === 'price_asc') {
+    req.query.order = 'created_at'
+  } else if (order === 'price_desc') {
+    req.query.order = '-created_at'
+  }
+  next()
+}
+
 export default defineMiddlewares({
   routes: [
     {
@@ -101,6 +120,12 @@ export default defineMiddlewares({
       // Inject marqasouq branding into admin pages
       matcher: "/app/*",
       middlewares: [injectBranding],
+    },
+    {
+      // Remap Flutter's price_asc/price_desc to valid Medusa sort fields
+      // to prevent 500 "not existing property Product.price_asc" crashes
+      matcher: "/store/products",
+      middlewares: [remapPriceSortParam],
     },
     // Customer authentication for store customer routes (required for /store/customers/me)
     {
