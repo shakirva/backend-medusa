@@ -6,14 +6,11 @@ import fs from "fs"
 import mime from "mime-types"
 import { injectBranding } from "./middlewares/branding"
 
-// Development-only middleware to safely handle multipart/form-data for admin
-// upload routes. This avoids the global JSON/body parser from interfering
-// with multipart streams during local development where middleware ordering
-// can cause `LIMIT_UNEXPECTED_FILE` errors.
-//
-// This middleware is intentionally gated to non-production environments and
-// requires either a valid admin session (production path) or the
-// DEV_ADMIN_TOKEN header when ENABLE_DEV_ADMIN_BYPASS=1.
+// Middleware to intercept multipart/form-data uploads for admin routes.
+// This MUST run in ALL environments (including production) because
+// Medusa's global body-parser will consume the stream before the route
+// handler gets it, causing a 500 error when Busboy tries to read an
+// already-consumed request body.
 
 const uploadDir = path.join(process.cwd(), "static", "uploads")
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true })
@@ -24,21 +21,8 @@ async function adminMultipartGuard(
   next: MedusaNextFunction
 ) {
   try {
-    // Only run in development to avoid touching production pipeline
-    if (process.env.NODE_ENV === 'production') return next()
-
     const ct = (req.headers['content-type'] || '') as string
     if (!ct.includes('multipart/form-data')) return next()
-
-    // If dev bypass is enabled, require the header token
-    if (process.env.ENABLE_DEV_ADMIN_BYPASS === '1') {
-      const token = process.env.DEV_ADMIN_TOKEN || ''
-      const got = (req.headers['x-dev-admin-token'] || req.headers['X-Dev-Admin-Token']) as any || ''
-      if (!token || String(got) !== String(token)) {
-        console.warn('Dev bypass enabled but missing/invalid x-dev-admin-token header (middleware)')
-        return res.status(401).json({ message: 'Unauthorized (dev-bypass)' })
-      }
-    }
 
     console.log('Admin multipart middleware handling upload for', req.path)
 
