@@ -500,6 +500,7 @@ const BrandFormDrawer = ({
   const [isActive, setIsActive] = useState(brand?.is_active ?? true)
   const [isSpecial, setIsSpecial] = useState(brand?.is_special ?? false)
   const [isLoading, setIsLoading] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   // Reset when brand changes
   useEffect(() => {
@@ -523,6 +524,7 @@ const BrandFormDrawer = ({
 
   const handleSubmit = async () => {
     setIsLoading(true)
+    setSaveError(null)
     try {
       let logoUrl = brand?.logo_url || ""
       if (logoFile) {
@@ -548,8 +550,9 @@ const BrandFormDrawer = ({
         logoUrl = resolved
       }
       onSave({ id: brand?.id, name, description, logo_url: logoUrl, is_active: isActive, is_special: isSpecial })
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error saving brand:", error)
+      setSaveError(error?.message || "Failed to save brand")
     } finally {
       setIsLoading(false)
     }
@@ -679,6 +682,9 @@ const BrandFormDrawer = ({
 
           {/* Footer */}
           <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-2xl flex flex-col-reverse sm:flex-row sm:justify-end gap-3">
+            {saveError && (
+              <p className="w-full text-sm text-red-600 self-center">⚠️ {saveError}</p>
+            )}
             <Button variant="secondary" onClick={onClose} className="w-full sm:w-auto justify-center">
               Cancel
             </Button>
@@ -716,7 +722,7 @@ const BrandsPage = () => {
       sdk.client.fetch("/admin/brands", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: brandData,
+        body: JSON.stringify(brandData),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["brands"] })
@@ -730,7 +736,7 @@ const BrandsPage = () => {
       sdk.client.fetch(`/admin/brands/${brandData.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: brandData,
+        body: JSON.stringify(brandData),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["brands"] })
