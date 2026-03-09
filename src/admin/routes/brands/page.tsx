@@ -397,17 +397,26 @@ const BrandCard = ({
       onMouseLeave={() => setShowActions(false)}
     >
       {/* Logo Container */}
-      <div className="p-6 flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-        <div className="w-32 h-16 rounded-full bg-white shadow-inner flex items-center justify-center overflow-hidden border border-gray-100">
+      <div className="p-4 flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 min-h-[120px]">
+        <div className="w-full h-24 rounded-xl bg-white shadow-sm flex items-center justify-center overflow-hidden border border-gray-100">
           {brand.logo_url ? (
             <img
               src={brand.logo_url}
               alt={brand.name}
-              className="max-w-[80%] max-h-[80%] object-contain"
+              className="w-full h-full object-contain p-2"
+              onError={(e) => {
+                const target = e.currentTarget
+                target.style.display = "none"
+                const parent = target.parentElement
+                if (parent) {
+                  parent.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#f3f4f6;font-size:28px;font-weight:700;color:#6b7280;letter-spacing:1px">${brand.name.slice(0,2).toUpperCase()}</div>`
+                }
+              }}
             />
           ) : (
-            <div className="flex items-center justify-center text-gray-400">
+            <div className="flex flex-col items-center justify-center gap-1 text-gray-400">
               <TagSolid className="w-8 h-8" />
+              <span className="text-xs font-medium">{brand.name.slice(0,2).toUpperCase()}</span>
             </div>
           )}
         </div>
