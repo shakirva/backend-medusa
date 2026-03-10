@@ -158,11 +158,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         SELECT
           p.id, p.title, p.handle, p.subtitle, p.description,
           p.thumbnail, p.status, p.collection_id, p.created_at, p.metadata,
-          COUNT(li.id) AS order_count
+          COUNT(oi.id) AS order_count
         FROM product p
         JOIN product_variant pv ON pv.product_id = p.id
         JOIN order_line_item li ON li.variant_id = pv.id
-        JOIN "order" o ON o.id = li.order_id
+        JOIN order_item oi ON oi.item_id = li.id
+        JOIN "order" o ON o.id = oi.order_id
         WHERE o.status = 'completed'
           AND p.status = 'published'
         GROUP BY p.id, p.title, p.handle, p.subtitle, p.description,
