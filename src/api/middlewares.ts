@@ -128,8 +128,9 @@ export default defineMiddlewares({
       middlewares: [authenticate("customer", ["session", "bearer"])],
     },
     // Cart session persistence (save/restore cart_id across devices)
+    // NOTE: Only protect /store/cart/session — NOT /store/carts (Medusa built-in, must be public)
     {
-      matcher: "/store/cart*",
+      matcher: "/store/cart/session",
       middlewares: [authenticate("customer", ["session", "bearer"])],
     },
     {
