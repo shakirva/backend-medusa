@@ -127,6 +127,11 @@ export default defineMiddlewares({
       matcher: "/store/wishlist*",
       middlewares: [authenticate("customer", ["session", "bearer"])],
     },
+    // Cart session persistence (save/restore cart_id across devices)
+    {
+      matcher: "/store/cart*",
+      middlewares: [authenticate("customer", ["session", "bearer"])],
+    },
     {
       matcher: "/store/products/*/reviews",
       middlewares: [authenticate("customer", ["session", "bearer"], { allowUnauthenticated: true })],
