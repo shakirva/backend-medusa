@@ -7,6 +7,7 @@
 
 import { ExecArgs } from "@medusajs/framework/types"
 import { Modules } from "@medusajs/framework/utils"
+import type { IncomingMessage } from "http"
 
 // Direct Odoo config
 const ODOO_CONFIG = {
@@ -101,9 +102,9 @@ async function fetchOdooCategories(uid: number) {
             }
         };
 
-        const req = https.request(options, (res) => {
+        const req = https.request(options, (res: IncomingMessage) => {
             let body = '';
-            res.on('data', (chunk) => body += chunk);
+            res.on('data', (chunk: Buffer) => body += chunk);
             res.on('end', () => {
                 try {
                     const response = JSON.parse(body);
@@ -158,9 +159,9 @@ async function fetchOdooBrands(uid: number) {
             }
         };
 
-        const req = https.request(options, (res) => {
+        const req = https.request(options, (res: IncomingMessage) => {
             let body = '';
-            res.on('data', (chunk) => body += chunk);
+            res.on('data', (chunk: Buffer) => body += chunk);
             res.on('end', () => {
                 try {
                     const response = JSON.parse(body);
