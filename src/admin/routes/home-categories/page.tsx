@@ -1,5 +1,4 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk"
-import { TagSolid } from "@medusajs/icons"
 import { Button, Container, Heading, Input, Switch } from "@medusajs/ui"
 import { useQuery } from "@tanstack/react-query"
 import { useMemo, useState } from "react"
@@ -139,9 +138,6 @@ const HomeCategoriesPage = () => {
   )
 }
 
-export const config = defineRouteConfig({
-  label: "Home Categories",
-  icon: TagSolid,
-})
+export const config = defineRouteConfig({})
 
 export default HomeCategoriesPage

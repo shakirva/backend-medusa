@@ -1,5 +1,5 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk"
-import { SquaresPlus, XMark, Photo, Check, ArrowUpTray } from "@medusajs/icons"
+import { XMark, Photo, Check, ArrowUpTray } from "@medusajs/icons"
 import { Container, Heading, Button, Input, Text, clx, Badge } from "@medusajs/ui"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useState, useRef } from "react"
@@ -473,9 +473,6 @@ const CategoryImagesPage = () => {
 // ─────────────────────────────────────────────
 // Route Config
 // ─────────────────────────────────────────────
-export const config = defineRouteConfig({
-  label: "Category Images",
-  icon: SquaresPlus,
-})
+export const config = defineRouteConfig({})
 
 export default CategoryImagesPage

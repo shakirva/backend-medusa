@@ -13,8 +13,8 @@ const SECTION_HANDLES: Record<string, string[]> = {
   best_in_powerbanks: ['best-in-power-banks', 'powerbanks', 'powerbank'],
   best_in_laptops: ['best-in-laptops', 'laptops', 'laptop'],
   new_arrival: ['new-arrival', 'new-arrivals'],
-  recommended: ['recommended', 'featured'],
   apple: ['apple'],
+  // 'recommended' is intentionally omitted — built dynamically from best sellers (completed orders)
 }
 
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
@@ -141,28 +141,100 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       return fetchByCollection(handles, limit)
     }
 
-    const [hostDeals, powerbanks, laptops, newArrivals, recommended, appleProducts] = await Promise.all([
+    const [hostDeals, powerbanks, laptops, newArrivals, appleProducts] = await Promise.all([
       fetchSection('host_deals', 8),
       fetchSection('best_in_powerbanks', 8),
       fetchSection('best_in_laptops', 8),
       fetchSection('new_arrival', 12),
-      fetchSection('recommended', 12),
       fetchSection('apple', 12),
     ])
 
-    // If recommended is empty, fall back to latest products
-    let recommendedFinal = recommended
+    // ── Recommended = Best Sellers (auto, no manual curation needed) ──────────
+    // Count how many times each product appears in completed orders.
+    // Falls back to newest published products if there are no completed orders yet.
+    let recommendedFinal: any[] = []
+    try {
+      const bestSellersResult = await pgConnection.raw(`
+        SELECT
+          p.id, p.title, p.handle, p.subtitle, p.description,
+          p.thumbnail, p.status, p.collection_id, p.created_at, p.metadata,
+          COUNT(li.id) AS order_count
+        FROM product p
+        JOIN product_variant pv ON pv.product_id = p.id
+        JOIN order_line_item li ON li.variant_id = pv.id
+        JOIN "order" o ON o.id = li.order_id
+        WHERE o.status = 'completed'
+          AND p.status = 'published'
+        GROUP BY p.id, p.title, p.handle, p.subtitle, p.description,
+                 p.thumbnail, p.status, p.collection_id, p.created_at, p.metadata
+        ORDER BY order_count DESC
+        LIMIT 24
+      `)
+      recommendedFinal = bestSellersResult.rows || []
+    } catch (e) {
+      // order table may differ — log and fall through to fallback
+      console.warn('Best sellers query failed, using fallback:', (e as any)?.message)
+    }
+
+    // Fallback: newest published products when no completed orders exist yet
     if (!recommendedFinal.length) {
       const fallback = await pgConnection.raw(
-        `SELECT id, title, handle, subtitle, description, thumbnail, status, created_at
+        `SELECT id, title, handle, subtitle, description, thumbnail, status, collection_id, created_at, metadata
          FROM product WHERE status = 'published'
-         ORDER BY created_at DESC LIMIT 12`
+         ORDER BY created_at DESC LIMIT 24`
       )
-      recommendedFinal = (fallback.rows || []).map((p: any) => ({
+      recommendedFinal = fallback.rows || []
+    }
+
+    // Hydrate with images + variants (same as fetchByCollection does)
+    if (recommendedFinal.length > 0) {
+      const productIds = recommendedFinal.map((p: any) => p.id)
+      const idPlaceholders = productIds.map(() => '?').join(', ')
+
+      const imgResult = await pgConnection.raw(
+        `SELECT id, product_id, url, rank FROM image WHERE product_id IN (${idPlaceholders}) ORDER BY rank ASC`,
+        productIds
+      )
+      const imagesByProduct: Record<string, any[]> = {}
+      for (const img of (imgResult.rows || [])) {
+        if (!imagesByProduct[img.product_id]) imagesByProduct[img.product_id] = []
+        imagesByProduct[img.product_id].push({ ...img, url: makeAbsolute(img.url) })
+      }
+
+      const varResult = await pgConnection.raw(
+        `SELECT pv.id, pv.product_id, pv.title, pv.sku, pv.manage_inventory,
+                pvp.amount, pvp.currency_code
+         FROM product_variant pv
+         LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id
+         LEFT JOIN price pvp ON pvp.price_set_id = pvps.price_set_id
+         WHERE pv.product_id IN (${idPlaceholders})`,
+        productIds
+      )
+      const variantsByProduct: Record<string, any[]> = {}
+      for (const v of (varResult.rows || [])) {
+        if (!variantsByProduct[v.product_id]) variantsByProduct[v.product_id] = []
+        const existing = variantsByProduct[v.product_id].find((ev: any) => ev.id === v.id)
+        if (existing) {
+          if (v.amount != null) {
+            existing.prices = existing.prices || []
+            existing.prices.push({ amount: v.amount, currency_code: v.currency_code })
+          }
+        } else {
+          variantsByProduct[v.product_id].push({
+            id: v.id,
+            title: v.title,
+            sku: v.sku,
+            manage_inventory: v.manage_inventory,
+            prices: v.amount != null ? [{ amount: v.amount, currency_code: v.currency_code }] : [],
+          })
+        }
+      }
+
+      recommendedFinal = recommendedFinal.map((p: any) => ({
         ...p,
         thumbnail: makeAbsolute(p.thumbnail),
-        images: [],
-        variants: [],
+        images: imagesByProduct[p.id] || [],
+        variants: variantsByProduct[p.id] || [],
       }))
     }
 
