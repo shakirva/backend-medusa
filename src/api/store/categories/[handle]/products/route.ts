@@ -102,15 +102,15 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       conditions.push("COALESCE((p.metadata->>'stock_qty')::numeric, 0) > 0")
     }
 
-    // Sort mapping
-    let orderBy = "p.created_at DESC"
+    // Sort mapping — outerOrderBy uses column aliases from the subquery SELECT
+    let outerOrderBy = "created_at DESC"
     switch (sort) {
-      case "price_asc": orderBy = "pp.amount ASC NULLS LAST"; break
-      case "price_desc": orderBy = "pp.amount DESC NULLS LAST"; break
-      case "newest": orderBy = "p.created_at DESC"; break
-      case "oldest": orderBy = "p.created_at ASC"; break
-      case "title_asc": orderBy = "p.title ASC"; break
-      case "title_desc": orderBy = "p.title DESC"; break
+      case "price_asc": outerOrderBy = "price ASC NULLS LAST"; break
+      case "price_desc": outerOrderBy = "price DESC NULLS LAST"; break
+      case "newest": outerOrderBy = "created_at DESC"; break
+      case "oldest": outerOrderBy = "created_at ASC"; break
+      case "title_asc": outerOrderBy = "title ASC"; break
+      case "title_desc": outerOrderBy = "title DESC"; break
     }
 
     // Count total
@@ -142,7 +142,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
          WHERE ${conditions.join(" AND ")}
          ORDER BY p.id, pp.amount ASC NULLS LAST
        ) deduped
-       ORDER BY ${orderBy}
+       ORDER BY ${outerOrderBy}
        LIMIT ? OFFSET ?`,
       [currency, ...params, limit, offset]
     )
