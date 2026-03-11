@@ -25,7 +25,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const sort = (req.query.sort as string) || "newest"
   const minPrice = req.query.min_price ? parseFloat(req.query.min_price as string) : null
   const maxPrice = req.query.max_price ? parseFloat(req.query.max_price as string) : null
-  const brand = req.query.brand as string
+  const brand = req.query.brand as string       // filter by odoo_brand in metadata
+  const color = req.query.color as string       // filter by color option value
   const inStock = req.query.in_stock as string
   const currency = (req.query.currency as string) || "aed"
 
@@ -77,8 +78,19 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       params.push(maxPrice)
     }
     if (brand) {
-      conditions.push("LOWER(p.title) LIKE ?")
-      params.push(`${brand.toLowerCase()}%`)
+      // Match against odoo_brand in metadata (exact, case-insensitive)
+      conditions.push("LOWER(p.metadata->>'odoo_brand') = LOWER(?)")
+      params.push(brand)
+    }
+    if (color) {
+      // Match against product option values (Color option)
+      conditions.push(`p.id IN (
+        SELECT DISTINCT p2.id FROM product p2
+        JOIN product_option po ON po.product_id = p2.id AND po.deleted_at IS NULL
+        JOIN product_option_value pov ON pov.option_id = po.id AND pov.deleted_at IS NULL
+        WHERE LOWER(po.title) IN ('color','colour') AND LOWER(pov.value) = LOWER(?)
+      )`)
+      params.push(color)
     }
     if (inStock === "true") {
       conditions.push("COALESCE((p.metadata->>'stock_qty')::numeric, 0) > 0")
@@ -137,8 +149,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         subtitle: p.subtitle,
         price: p.price ? parseFloat(p.price) : null,
         currency_code: p.currency_code || currency,
-        in_stock: (meta.stock_qty || 0) > 0,
-        brand: extractBrand(p.title),
+        in_stock: (meta.odoo_qty || meta.stock_qty || 0) > 0,
+        brand: meta.odoo_brand || extractBrand(p.title),
         created_at: p.created_at,
       }
     })
