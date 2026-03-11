@@ -78,9 +78,15 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       params.push(maxPrice)
     }
     if (brand) {
-      // Match against odoo_brand in metadata (exact, case-insensitive)
-      conditions.push("LOWER(p.metadata->>'odoo_brand') = LOWER(?)")
-      params.push(brand)
+      // Match against odoo_brand or brand_name in metadata, fallback to title starts-with
+      conditions.push(`(
+        LOWER(COALESCE(NULLIF(TRIM(p.metadata->>'odoo_brand'), ''), NULLIF(TRIM(p.metadata->>'brand_name'), ''))) = LOWER(?)
+        OR (
+          COALESCE(NULLIF(TRIM(p.metadata->>'odoo_brand'), ''), NULLIF(TRIM(p.metadata->>'brand_name'), '')) IS NULL
+          AND LOWER(p.title) LIKE LOWER(? || '%')
+        )
+      )`)
+      params.push(brand, brand)
     }
     if (color) {
       // Match against product option values (Color option)
