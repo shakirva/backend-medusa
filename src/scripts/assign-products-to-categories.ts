@@ -6,7 +6,6 @@
  */
 
 import { ExecArgs } from "@medusajs/framework/types";
-import { Modules } from "@medusajs/framework/utils";
 
 // Category mapping rules based on product name keywords
 const CATEGORY_RULES: { keywords: string[]; category: string }[] = [
@@ -136,45 +135,50 @@ const BRAND_RULES: { keywords: string[]; brand: string }[] = [
 
 export default async function assignProductsToCategories({ container }: ExecArgs) {
   const logger = container.resolve("logger");
-  const productService = container.resolve(Modules.PRODUCT);
+  const pgConnection = container.resolve("__pg_connection__") as any;
 
-  logger.info("🔄 Assigning products to categories based on product names...\n");
+  logger.info("🔄 Assigning products to categories based on product names (raw SQL, all products)...\n");
 
   try {
-    // Fetch all products
-    const products = await productService.listProducts({}, {
-      select: ["id", "title", "handle"],
-      relations: ["categories"],
-      take: 500,
-    });
-
+    // Fetch ALL published products using raw SQL — no limit issues
+    const productsResult = await pgConnection.raw(`
+      SELECT p.id, p.title,
+             COALESCE(
+               json_agg(pcp.product_category_id) FILTER (WHERE pcp.product_category_id IS NOT NULL),
+               '[]'
+             ) AS existing_category_ids
+      FROM product p
+      LEFT JOIN product_category_product pcp ON pcp.product_id = p.id
+      WHERE p.status = 'published' AND p.deleted_at IS NULL
+      GROUP BY p.id, p.title
+      ORDER BY p.title
+    `);
+    const products = productsResult.rows || [];
     logger.info(`📦 Found ${products.length} products to process\n`);
 
     // Fetch all categories
-    const categories = await productService.listProductCategories({}, {
-      select: ["id", "name", "handle"],
-      take: 200,
-    });
-
-    // Build category handle to ID map
+    const catsResult = await pgConnection.raw(`
+      SELECT id, handle FROM product_category WHERE deleted_at IS NULL
+    `);
     const categoryMap = new Map<string, string>();
-    for (const cat of categories) {
+    for (const cat of catsResult.rows) {
       categoryMap.set(cat.handle, cat.id);
     }
-    logger.info(`📁 Found ${categories.length} categories\n`);
+    logger.info(`📁 Found ${catsResult.rows.length} categories\n`);
 
     let assignedCount = 0;
     let skippedCount = 0;
+    let alreadyCount = 0;
 
     // Process each product
     for (const product of products) {
       const title = (product.title || '').toLowerCase();
-      const existingCategoryIds = new Set((product.categories || []).map((c: any) => c.id));
-      
+      const existingCategoryIds = new Set<string>(product.existing_category_ids || []);
+
       // Find matching categories
       const matchedCategoryIds: string[] = [];
       const matchedCategoryNames: string[] = [];
-      
+
       for (const rule of CATEGORY_RULES) {
         for (const keyword of rule.keywords) {
           if (title.includes(keyword.toLowerCase())) {
@@ -183,38 +187,34 @@ export default async function assignProductsToCategories({ container }: ExecArgs
               matchedCategoryIds.push(catId);
               matchedCategoryNames.push(rule.category);
             }
-            break; // Only match first keyword in each rule
+            break;
           }
         }
       }
 
-      // Assign categories if any new ones found
       if (matchedCategoryIds.length > 0) {
-        try {
-          // Combine existing and new category IDs
-          const allCategoryIds = [...existingCategoryIds, ...matchedCategoryIds];
-          
-          await productService.updateProducts(product.id, {
-            category_ids: allCategoryIds,
-          });
-          
-          assignedCount++;
-          logger.info(`✓ ${product.title}`);
-          logger.info(`  → Categories: ${matchedCategoryNames.join(', ')}`);
-        } catch (e: any) {
-          logger.warn(`  ⚠ Could not assign: ${e.message}`);
+        // Insert new category assignments using raw SQL (ignore duplicates)
+        for (const catId of matchedCategoryIds) {
+          await pgConnection.raw(`
+            INSERT INTO product_category_product (product_id, product_category_id)
+            VALUES (?, ?)
+            ON CONFLICT DO NOTHING
+          `, [product.id, catId]);
         }
+        assignedCount++;
+        logger.info(`✓ ${product.title}`);
+        logger.info(`  → Categories: ${matchedCategoryNames.join(', ')}`);
       } else if (existingCategoryIds.size === 0) {
         skippedCount++;
-        // Try to find at least one match
-        logger.debug(`  ○ No category match for: ${product.title}`);
+      } else {
+        alreadyCount++;
       }
     }
 
     logger.info(`\n✅ Category assignment complete!`);
     logger.info(`   Products updated: ${assignedCount}`);
     logger.info(`   Products skipped (no match): ${skippedCount}`);
-    logger.info(`   Products already categorized: ${products.length - assignedCount - skippedCount}`);
+    logger.info(`   Products already categorized: ${alreadyCount}`);
 
   } catch (error: any) {
     logger.error(`❌ Error: ${error.message}`);
