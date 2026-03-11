@@ -126,20 +126,23 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     )
     const total = parseInt(countResult.rows[0].total)
 
-    // Get products
+    // Get products — use subquery to deduplicate by product, then sort correctly
     const productsResult = await pgConnection.raw(
-      `SELECT DISTINCT ON (p.id) 
-              p.id, p.title, p.handle, p.thumbnail, p.subtitle,
-              p.description, p.metadata, p.created_at,
-              pp.amount as price, pp.currency_code,
-              pv.id as variant_id, pv.sku
-       FROM product p
-       JOIN product_category_product pcp ON pcp.product_id = p.id
-       LEFT JOIN product_variant pv ON pv.product_id = p.id AND pv.deleted_at IS NULL
-       LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id
-       LEFT JOIN price pp ON pp.price_set_id = pvps.price_set_id AND pp.currency_code = ?
-       WHERE ${conditions.join(" AND ")}
-       ORDER BY p.id, ${orderBy}
+      `SELECT * FROM (
+         SELECT DISTINCT ON (p.id) 
+                p.id, p.title, p.handle, p.thumbnail, p.subtitle,
+                p.description, p.metadata, p.created_at,
+                pp.amount as price, pp.currency_code,
+                pv.id as variant_id, pv.sku
+         FROM product p
+         JOIN product_category_product pcp ON pcp.product_id = p.id
+         LEFT JOIN product_variant pv ON pv.product_id = p.id AND pv.deleted_at IS NULL
+         LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id
+         LEFT JOIN price pp ON pp.price_set_id = pvps.price_set_id AND pp.currency_code = ?
+         WHERE ${conditions.join(" AND ")}
+         ORDER BY p.id, pp.amount ASC NULLS LAST
+       ) deduped
+       ORDER BY ${orderBy}
        LIMIT ? OFFSET ?`,
       [currency, ...params, limit, offset]
     )
