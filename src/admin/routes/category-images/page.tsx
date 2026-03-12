@@ -1,4 +1,3 @@
-import { defineRouteConfig } from "@medusajs/admin-sdk"
 import { XMark, Photo, Check, ArrowUpTray } from "@medusajs/icons"
 import { Container, Heading, Button, Input, Text, clx, Badge } from "@medusajs/ui"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
@@ -470,9 +469,9 @@ const CategoryImagesPage = () => {
   )
 }
 
-// ─────────────────────────────────────────────
-// Route Config
-// ─────────────────────────────────────────────
-export const config = defineRouteConfig({})
+// Route config removed — image management is now a widget on the
+// standard category detail page (product_category.details.side.before).
+// This page still exists at /app/category-images for bulk editing but
+// no longer appears as a separate sidebar item.
 
 export default CategoryImagesPage

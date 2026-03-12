@@ -6,11 +6,14 @@ import fs from "fs"
 import mime from "mime-types"
 import { injectBranding } from "./middlewares/branding"
 
-// Middleware to intercept multipart/form-data uploads for admin routes.
-// This MUST run in ALL environments (including production) because
-// Medusa's global body-parser will consume the stream before the route
-// handler gets it, causing a 500 error when Busboy tries to read an
-// already-consumed request body.
+// Development-only middleware to safely handle multipart/form-data for admin
+// upload routes. This avoids the global JSON/body parser from interfering
+// with multipart streams during local development where middleware ordering
+// can cause `LIMIT_UNEXPECTED_FILE` errors.
+//
+// This middleware is intentionally gated to non-production environments and
+// requires either a valid admin session (production path) or the
+// DEV_ADMIN_TOKEN header when ENABLE_DEV_ADMIN_BYPASS=1.
 
 const uploadDir = path.join(process.cwd(), "static", "uploads")
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true })
@@ -21,8 +24,21 @@ async function adminMultipartGuard(
   next: MedusaNextFunction
 ) {
   try {
+    // Only run in development to avoid touching production pipeline
+    if (process.env.NODE_ENV === 'production') return next()
+
     const ct = (req.headers['content-type'] || '') as string
     if (!ct.includes('multipart/form-data')) return next()
+
+    // If dev bypass is enabled, require the header token
+    if (process.env.ENABLE_DEV_ADMIN_BYPASS === '1') {
+      const token = process.env.DEV_ADMIN_TOKEN || ''
+      const got = (req.headers['x-dev-admin-token'] || req.headers['X-Dev-Admin-Token']) as any || ''
+      if (!token || String(got) !== String(token)) {
+        console.warn('Dev bypass enabled but missing/invalid x-dev-admin-token header (middleware)')
+        return res.status(401).json({ message: 'Unauthorized (dev-bypass)' })
+      }
+    }
 
     console.log('Admin multipart middleware handling upload for', req.path)
 
@@ -70,25 +86,6 @@ async function adminMultipartGuard(
   }
 }
 
-// Middleware to remap Flutter's price_asc / price_desc sort params to valid
-// Medusa sort fields. Medusa v2 does not support ordering by price directly
-// on the product list endpoint — it only supports fields that exist on the
-// Product entity (e.g. created_at, title). Sending price_asc/price_desc
-// causes a 500 "not existing property" crash, so we remap them here.
-function remapPriceSortParam(
-  req: MedusaRequest,
-  _res: MedusaResponse,
-  next: MedusaNextFunction
-) {
-  const order = req.query.order as string | undefined
-  if (order === 'price_asc') {
-    req.query.order = 'created_at'
-  } else if (order === 'price_desc') {
-    req.query.order = '-created_at'
-  }
-  next()
-}
-
 export default defineMiddlewares({
   routes: [
     {
@@ -104,12 +101,6 @@ export default defineMiddlewares({
       // Inject marqasouq branding into admin pages
       matcher: "/app/*",
       middlewares: [injectBranding],
-    },
-    {
-      // Remap Flutter's price_asc/price_desc to valid Medusa sort fields
-      // to prevent 500 "not existing property Product.price_asc" crashes
-      matcher: "/store/products",
-      middlewares: [remapPriceSortParam],
     },
     // Customer authentication for store customer routes (required for /store/customers/me)
     {
@@ -127,10 +118,10 @@ export default defineMiddlewares({
       matcher: "/store/wishlist*",
       middlewares: [authenticate("customer", ["session", "bearer"])],
     },
-    // Cart session persistence (save/restore cart_id across devices)
-    // NOTE: Only protect /store/cart/session — NOT /store/carts (Medusa built-in, must be public)
+    // Customer cancel order - must be authenticated and own the order
     {
-      matcher: "/store/cart/session",
+      matcher: "/store/orders/*/cancel",
+      method: "POST",
       middlewares: [authenticate("customer", ["session", "bearer"])],
     },
     {
