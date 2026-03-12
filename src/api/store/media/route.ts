@@ -57,31 +57,30 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // Batch-fetch products from the DB using raw SQL for performance
+    // Uses Medusa v2 pricing tables: price + product_variant_price_set
     const productMap = new Map<string, any>()
     if (allProductIds.length > 0) {
       try {
         const pgConnection: Knex = req.scope.resolve("__pg_connection__")
         const placeholders = allProductIds.map((_, i) => `$${i + 1}`).join(', ')
         const result = await pgConnection.raw(
-          `SELECT p.id, p.title, p.thumbnail,
-                  (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id LIMIT 1) as image_url,
-                  pv.calculated_price
+          `SELECT DISTINCT ON (p.id)
+                  p.id, p.title, p.handle, p.thumbnail,
+                  pr.amount as calculated_price
            FROM product p
-           LEFT JOIN LATERAL (
-             SELECT MIN(mp.amount) as calculated_price
-             FROM money_amount mp
-             JOIN product_variant_money_amount pvma ON pvma.money_amount_id = mp.id
-             JOIN product_variant pvar ON pvar.id = pvma.variant_id
-             WHERE pvar.product_id = p.id
-           ) pv ON true
-           WHERE p.id IN (${placeholders}) AND p.deleted_at IS NULL`,
+           LEFT JOIN product_variant pvar ON pvar.product_id = p.id AND pvar.deleted_at IS NULL
+           LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pvar.id
+           LEFT JOIN price pr ON pr.price_set_id = pvps.price_set_id
+           WHERE p.id IN (${placeholders}) AND p.deleted_at IS NULL
+           ORDER BY p.id, pr.amount ASC`,
           allProductIds
         )
         for (const row of result.rows) {
           productMap.set(row.id, {
             id: row.id,
             title: row.title,
-            thumbnail: row.thumbnail || row.image_url || null,
+            handle: row.handle || null,
+            thumbnail: row.thumbnail || null,
             price: row.calculated_price ? (row.calculated_price / 100).toFixed(2) : null,
           })
         }

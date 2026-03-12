@@ -257,6 +257,61 @@ const MediaPage = () => {
     })
   }
 
+  // Capture a thumbnail frame from a video file (client-side, at 1 second)
+  const captureVideoThumbnail = (file: File): Promise<File | null> => {
+    return new Promise((resolve) => {
+      try {
+        const video = document.createElement('video')
+        const url = URL.createObjectURL(file)
+        video.src = url
+        video.muted = true
+        video.playsInline = true
+        video.currentTime = 1
+        const cleanup = () => URL.revokeObjectURL(url)
+        video.onloadeddata = () => {
+          video.currentTime = 1
+        }
+        video.onseeked = () => {
+          try {
+            const canvas = document.createElement('canvas')
+            canvas.width = video.videoWidth || 640
+            canvas.height = video.videoHeight || 360
+            const ctx = canvas.getContext('2d')
+            if (!ctx) { cleanup(); return resolve(null) }
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+            canvas.toBlob((blob) => {
+              cleanup()
+              if (!blob) return resolve(null)
+              const thumbFile = new File([blob], 'thumbnail.jpg', { type: 'image/jpeg' })
+              resolve(thumbFile)
+            }, 'image/jpeg', 0.85)
+          } catch { cleanup(); resolve(null) }
+        }
+        video.onerror = () => { cleanup(); resolve(null) }
+        // Fallback timeout
+        setTimeout(() => { cleanup(); resolve(null) }, 8000)
+      } catch { resolve(null) }
+    })
+  }
+
+  // Upload a file to the server, returns the URL or null on failure
+  const uploadFile = (file: File): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const form = new FormData()
+      form.append('file', file)
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `/admin/media/upload`)
+      xhr.withCredentials = true
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)?.url || null) } catch { resolve(null) }
+        } else { resolve(null) }
+      }
+      xhr.onerror = () => resolve(null)
+      xhr.send(form)
+    })
+  }
+
   const saveMediaRecord = async (uploadedUrl: string, mimeType: string, fileName: string) => {
     const snap = newMediaRef.current
     const payload: any = {
@@ -317,8 +372,28 @@ const MediaPage = () => {
       // Auto-create record right after upload using the ref (always fresh)
       if (!isThumbnail && autoCreateRef.current && uploadedUrl) {
         setSubmitting(true)
+
+        // Auto-capture thumbnail from video before saving
+        let autoThumbUrl: string | null = newMediaRef.current.thumbnail_url || null
+        if (!autoThumbUrl && file.type.startsWith('video/')) {
+          setMessage('Generating thumbnail…')
+          try {
+            const thumbFile = await captureVideoThumbnail(file)
+            if (thumbFile) {
+              setMessage('Uploading thumbnail…')
+              const tUrl = await uploadFile(thumbFile)
+              if (tUrl) {
+                autoThumbUrl = tUrl
+                updateNewMedia((p) => ({ ...p, thumbnail_url: tUrl }))
+              }
+            }
+          } catch { /* thumbnail is optional, continue */ }
+        }
+
         setMessage('Saving media record…')
         try {
+          // Temporarily inject the thumbnail into the ref so saveMediaRecord picks it up
+          if (autoThumbUrl) newMediaRef.current = { ...newMediaRef.current, thumbnail_url: autoThumbUrl }
           await saveMediaRecord(uploadedUrl, file.type, file.name)
           setMessage('✅ Media created successfully!')
           setOpenCreate(false)
@@ -346,6 +421,22 @@ const MediaPage = () => {
     }
     setCreateError(null)
     setSubmitting(true)
+
+    // Auto-capture thumbnail if not already set and URL is a video
+    if (!newMediaRef.current.thumbnail_url && newMediaRef.current.mime_type?.startsWith('video/')) {
+      setMessage('Generating thumbnail…')
+      try {
+        const resp = await fetch(newMediaRef.current.url || '')
+        const blob = await resp.blob()
+        const videoFile = new File([blob], 'video.mp4', { type: blob.type })
+        const thumbFile = await captureVideoThumbnail(videoFile)
+        if (thumbFile) {
+          const tUrl = await uploadFile(thumbFile)
+          if (tUrl) newMediaRef.current = { ...newMediaRef.current, thumbnail_url: tUrl }
+        }
+      } catch { /* optional */ }
+    }
+
     try {
       await saveMediaRecord(url, newMediaRef.current.mime_type || '', 'Untitled')
       setOpenCreate(false)
