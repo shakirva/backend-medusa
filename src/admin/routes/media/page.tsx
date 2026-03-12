@@ -241,8 +241,11 @@ const MediaPage = () => {
   const [progress, setProgress] = useState(0)
   const [autoCreate, setAutoCreate] = useState(true)
   const [message, setMessage] = useState<string | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const thumbRef = useRef<HTMLInputElement | null>(null)
+  // Track latest uploaded URL/type in a ref so autoCreate can read it without stale closure
+  const uploadedRef = useRef<{ url: string; mime_type: string } | null>(null)
 
   const handleUpload = async (file: File, isThumbnail = false) => {
     setUploading(true)
@@ -266,12 +269,13 @@ const MediaPage = () => {
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) {
             try {
-              const data = JSON.parse(xhr.responseText)
-              uploadedUrl = data.url
+              const respData = JSON.parse(xhr.responseText)
+              uploadedUrl = respData.url
               if (isThumbnail) {
-                setNewMedia((p) => ({ ...p, thumbnail_url: data.url }))
+                setNewMedia((p) => ({ ...p, thumbnail_url: respData.url }))
               } else {
-                setNewMedia((p) => ({ ...p, url: data.url, mime_type: file.type }))
+                uploadedRef.current = { url: respData.url, mime_type: file.type }
+                setNewMedia((p) => ({ ...p, url: respData.url, mime_type: file.type }))
               }
               setMessage('Upload succeeded')
               resolve()
@@ -286,50 +290,74 @@ const MediaPage = () => {
         xhr.send(form)
       })
 
+      // autoCreate: immediately save the media record using the just-uploaded URL
       if (!isThumbnail && autoCreate && uploadedUrl) {
         try {
           setSubmitting(true)
-          const payload: any = {
-            url: uploadedUrl,
-            title: newMedia.title || file.name,
-            title_ar: newMedia.title_ar,
-            mime_type: file.type,
-            brand: newMedia.brand || 'Markasouq',
-            views: newMedia.views || 0,
-            display_order: newMedia.display_order || 0,
-            is_featured: newMedia.is_featured || false,
-            product_ids: newMedia.product_ids || [],
-          }
-          if (newMedia.thumbnail_url) payload.thumbnail_url = newMedia.thumbnail_url
-          await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
-          setMessage('Media record created')
-          setOpenCreate(false)
-          setNewMedia({})
-          await refetch()
+          setMessage('Saving media record…')
+          // Read title/brand/products from current state via functional updater trick
+          // but since we need current state values, we use a ref-based approach:
+          setNewMedia((current) => {
+            // Fire the API call inside the updater to capture fresh state — 
+            // we do it outside via a small async IIFE using the captured current value
+            const snap = { ...current }
+            ;(async () => {
+              try {
+                const payload: any = {
+                  url: uploadedUrl,
+                  title: snap.title || file.name,
+                  title_ar: snap.title_ar || null,
+                  mime_type: file.type,
+                  brand: snap.brand || 'Markasouq',
+                  views: snap.views || 0,
+                  display_order: snap.display_order || 0,
+                  is_featured: snap.is_featured || false,
+                  product_ids: snap.product_ids || [],
+                }
+                if (snap.thumbnail_url) payload.thumbnail_url = snap.thumbnail_url
+                await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
+                setMessage('✅ Media created successfully!')
+                setOpenCreate(false)
+                setNewMedia({})
+                uploadedRef.current = null
+                await refetch()
+              } catch (err: any) {
+                console.error('Auto-create failed', err)
+                setMessage(`❌ Upload saved but record failed: ${err?.message || 'unknown error'}`)
+              } finally {
+                setSubmitting(false)
+              }
+            })()
+            return current // don't actually change state in the updater
+          })
         } catch (e) {
-          console.error('Auto-create failed', e)
-          setMessage('Media created but failed to save record')
-        } finally {
           setSubmitting(false)
         }
       }
     } catch (e: any) {
       console.error('Upload failed', e)
-      setMessage(typeof e?.message === 'string' ? e.message : 'Upload failed')
+      setMessage(`❌ ${typeof e?.message === 'string' ? e.message : 'Upload failed'}`)
     } finally {
       setUploading(false)
     }
   }
 
   const handleCreate = async () => {
-    if (!newMedia.url) return
+    // Use the URL from state or from the uploadedRef (in case state update hasn't flushed)
+    const url = newMedia.url || uploadedRef.current?.url
+    const mime_type = newMedia.mime_type || uploadedRef.current?.mime_type
+    if (!url) {
+      setCreateError('Please upload a file first (or enter a URL).')
+      return
+    }
+    setCreateError(null)
     setSubmitting(true)
     try {
       const payload: any = {
-        url: newMedia.url,
-        title: newMedia.title,
-        title_ar: newMedia.title_ar,
-        mime_type: newMedia.mime_type,
+        url,
+        title: newMedia.title || 'Untitled',
+        title_ar: newMedia.title_ar || null,
+        mime_type,
         brand: newMedia.brand || 'Markasouq',
         views: newMedia.views || 0,
         display_order: newMedia.display_order || 0,
@@ -340,9 +368,13 @@ const MediaPage = () => {
       await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
       setOpenCreate(false)
       setNewMedia({})
+      uploadedRef.current = null
+      setMessage(null)
+      setCreateError(null)
       await refetch()
-    } catch (e) {
+    } catch (e: any) {
       console.error('Create media failed', e)
+      setCreateError(e?.message || 'Failed to save media record. Please try again.')
     } finally {
       setSubmitting(false)
     }
@@ -402,7 +434,7 @@ const MediaPage = () => {
       <DataTable instance={table}>
         <DataTable.Toolbar className="flex items-center justify-between">
           <Heading>Media</Heading>
-          <Button variant="primary" onClick={() => setOpenCreate(true)}>Create Media</Button>
+          <Button variant="primary" onClick={() => { setOpenCreate(true); setNewMedia({}); setMessage(null); setCreateError(null); uploadedRef.current = null }}>Create Media</Button>
         </DataTable.Toolbar>
         <DataTable.Table />
         <DataTable.Pagination />
@@ -513,8 +545,17 @@ const MediaPage = () => {
           </div>
         </Drawer.Body>
         <Drawer.Footer>
-          <Drawer.Close asChild><Button variant="secondary">Cancel</Button></Drawer.Close>
-          <Button isLoading={submitting} onClick={handleCreate}>Create</Button>
+          {createError && (
+            <div className="w-full mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-600">
+              {createError}
+            </div>
+          )}
+          <div className="flex gap-2 w-full justify-end">
+            <Drawer.Close asChild><Button variant="secondary" onClick={() => { setNewMedia({}); setMessage(null); setCreateError(null); uploadedRef.current = null }}>Cancel</Button></Drawer.Close>
+            <Button isLoading={submitting} onClick={handleCreate}>
+              {newMedia.url || uploadedRef.current ? 'Create' : 'Create (upload file first)'}
+            </Button>
+          </div>
         </Drawer.Footer>
       </Drawer>
     </Container>
