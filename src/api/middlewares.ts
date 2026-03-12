@@ -24,21 +24,8 @@ async function adminMultipartGuard(
   next: MedusaNextFunction
 ) {
   try {
-    // Only run in development to avoid touching production pipeline
-    if (process.env.NODE_ENV === 'production') return next()
-
     const ct = (req.headers['content-type'] || '') as string
     if (!ct.includes('multipart/form-data')) return next()
-
-    // If dev bypass is enabled, require the header token
-    if (process.env.ENABLE_DEV_ADMIN_BYPASS === '1') {
-      const token = process.env.DEV_ADMIN_TOKEN || ''
-      const got = (req.headers['x-dev-admin-token'] || req.headers['X-Dev-Admin-Token']) as any || ''
-      if (!token || String(got) !== String(token)) {
-        console.warn('Dev bypass enabled but missing/invalid x-dev-admin-token header (middleware)')
-        return res.status(401).json({ message: 'Unauthorized (dev-bypass)' })
-      }
-    }
 
     console.log('Admin multipart middleware handling upload for', req.path)
 
@@ -74,6 +61,13 @@ async function adminMultipartGuard(
       if (!storedFilePath) {
         return res.status(400).json({ message: 'No file uploaded' })
       }
+      // Block video uploads unless explicitly enabled
+      const isVideo = (mimetype || '').startsWith('video/')
+      const allowVideos = String(process.env.ALLOW_VIDEO_UPLOADS || '').toLowerCase() === 'true'
+      if (isVideo && !allowVideos) {
+        try { if (fs.existsSync(storedFilePath!)) fs.unlinkSync(storedFilePath!) } catch {}
+        return res.status(400).json({ message: 'Video uploads are disabled. Set ALLOW_VIDEO_UPLOADS=true to enable.' })
+      }
       const url = `/static/uploads/${path.basename(storedFilePath)}`
       console.log('Middleware upload OK ->', url)
       return res.json({ url, filename: originalName, size, mimetype })
@@ -95,6 +89,8 @@ export default defineMiddlewares({
     },
     {
       matcher: "/admin/media/upload",
+      // Disable Medusa's built-in body parser so multer can read the raw multipart stream
+      bodyParser: false,
       middlewares: [adminMultipartGuard],
     },
     {
