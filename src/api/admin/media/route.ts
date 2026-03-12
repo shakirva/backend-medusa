@@ -29,6 +29,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       views: m.views ?? 0,
       display_order: m.display_order ?? 0,
       is_featured: !!m.is_featured,
+      product_ids: m.product_ids || [],
       metadata: m.metadata || null,
     }))
 
@@ -59,6 +60,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       views: typeof body.views === "number" ? body.views : undefined,
       display_order: typeof body.display_order === "number" ? body.display_order : undefined,
       is_featured: typeof body.is_featured === "boolean" ? body.is_featured : undefined,
+      product_ids: Array.isArray(body.product_ids) ? body.product_ids : [],
       metadata: body.metadata,
     }
 

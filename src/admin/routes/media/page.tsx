@@ -16,6 +16,7 @@ type Media = {
   views?: number | null
   display_order?: number | null
   is_featured?: boolean | null
+  product_ids?: string[]
 }
 
 type MediaResponse = { media: Media[]; count: number }
@@ -25,6 +26,13 @@ type Brand = {
   name: string
   logo_url?: string | null
   is_active: boolean
+}
+
+type Product = {
+  id: string
+  title: string
+  thumbnail?: string | null
+  handle?: string | null
 }
 
 const columnHelper = createDataTableColumnHelper<Media>()
@@ -49,7 +57,6 @@ const BrandLogoPicker = ({
 
   return (
     <div className="relative">
-      {/* Trigger */}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -74,13 +81,10 @@ const BrandLogoPicker = ({
         </svg>
       </button>
 
-      {/* Dropdown */}
       {open && (
         <>
-          {/* Backdrop */}
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
-            {/* Clear option */}
             <button
               type="button"
               onClick={() => { onChange(""); setOpen(false) }}
@@ -89,8 +93,6 @@ const BrandLogoPicker = ({
               <span className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-xs">✕</span>
               Clear selection
             </button>
-
-            {/* Brand grid */}
             <div className="max-h-64 overflow-y-auto p-2 grid grid-cols-2 gap-2">
               {brands.length === 0 && (
                 <p className="col-span-2 text-center text-xs text-gray-400 py-4">No brands found</p>
@@ -102,18 +104,11 @@ const BrandLogoPicker = ({
                     key={brand.id}
                     type="button"
                     onClick={() => { onChange(brand.name); setOpen(false) }}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-left ${isSelected
-                        ? "border-violet-400 bg-violet-50"
-                        : "border-gray-100 hover:border-gray-300 hover:bg-gray-50"
-                      }`}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-left ${isSelected ? "border-violet-400 bg-violet-50" : "border-gray-100 hover:border-gray-300 hover:bg-gray-50"}`}
                   >
                     <div className="w-8 h-8 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden flex-shrink-0">
                       {brand.logo_url ? (
-                        <img
-                          src={brand.logo_url}
-                          alt={brand.name}
-                          className="max-w-full max-h-full object-contain"
-                        />
+                        <img src={brand.logo_url} alt={brand.name} className="max-w-full max-h-full object-contain" />
                       ) : (
                         <span className="text-xs font-bold text-gray-500">{brand.name[0]}</span>
                       )}
@@ -133,6 +128,77 @@ const BrandLogoPicker = ({
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+// ─── Product Search Picker ────────────────────────────────────────────────────
+const ProductPicker = ({
+  selectedIds,
+  onChange,
+}: {
+  selectedIds: string[]
+  onChange: (ids: string[]) => void
+}) => {
+  const [search, setSearch] = useState("")
+
+  const { data, isLoading } = useQuery<{ products: Product[]; count: number }>({
+    queryKey: ["admin-products-picker", search],
+    queryFn: () => sdk.client.fetch(`/admin/products?q=${encodeURIComponent(search)}&limit=20`, { method: "GET" }),
+    staleTime: 30_000,
+  })
+  const products = data?.products ?? []
+
+  const toggle = (id: string) => {
+    if (selectedIds.includes(id)) {
+      onChange(selectedIds.filter((i) => i !== id))
+    } else {
+      onChange([...selectedIds, id])
+    }
+  }
+
+  return (
+    <div>
+      <Input
+        placeholder="Search products to link…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-2"
+      />
+      {selectedIds.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {selectedIds.map((id) => {
+            const p = products.find((x) => x.id === id)
+            return (
+              <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-700 text-xs rounded-full">
+                {p?.title || id.substring(0, 12) + "…"}
+                <button type="button" onClick={() => toggle(id)} className="ml-0.5 hover:text-red-500">×</button>
+              </span>
+            )
+          })}
+        </div>
+      )}
+      <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+        {isLoading && <div className="p-3 text-xs text-gray-400 text-center">Loading…</div>}
+        {!isLoading && products.length === 0 && <div className="p-3 text-xs text-gray-400 text-center">No products found</div>}
+        {products.map((p) => {
+          const checked = selectedIds.includes(p.id)
+          return (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => toggle(p.id)}
+              className={`w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-gray-50 transition-colors ${checked ? "bg-violet-50" : ""}`}
+            >
+              <div className="w-8 h-8 rounded bg-gray-100 flex-shrink-0 overflow-hidden">
+                {p.thumbnail ? <img src={p.thumbnail} alt={p.title} className="w-full h-full object-contain" /> : <div className="w-full h-full bg-gray-200" />}
+              </div>
+              <span className="text-xs text-gray-800 flex-1 truncate">{p.title}</span>
+              {checked && <span className="text-violet-500 text-sm">✓</span>}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -178,7 +244,6 @@ const MediaPage = () => {
   const fileRef = useRef<HTMLInputElement | null>(null)
   const thumbRef = useRef<HTMLInputElement | null>(null)
 
-  // Upload using XHR so we can get progress events and ensure credentials are sent
   const handleUpload = async (file: File, isThumbnail = false) => {
     setUploading(true)
     setProgress(0)
@@ -214,14 +279,13 @@ const MediaPage = () => {
               reject(new Error('Invalid upload response'))
             }
           } else {
-            reject(new Error(`Upload failed: ${xhr.status}`))
+            reject(new Error(`Upload failed: ${xhr.status} — ${xhr.responseText}`))
           }
         }
         xhr.onerror = () => reject(new Error('Upload network error'))
         xhr.send(form)
       })
 
-      // Auto-create media record after upload if enabled (only for primary file)
       if (!isThumbnail && autoCreate && uploadedUrl) {
         try {
           setSubmitting(true)
@@ -233,20 +297,18 @@ const MediaPage = () => {
             brand: newMedia.brand || 'Markasouq',
             views: newMedia.views || 0,
             display_order: newMedia.display_order || 0,
-            is_featured: newMedia.is_featured || false
+            is_featured: newMedia.is_featured || false,
+            product_ids: newMedia.product_ids || [],
           }
           if (newMedia.thumbnail_url) payload.thumbnail_url = newMedia.thumbnail_url
           await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
           setMessage('Media record created')
-
-          // Attachment to a gallery was intentionally removed from the create drawer.
-
           setOpenCreate(false)
           setNewMedia({})
           await refetch()
         } catch (e) {
           console.error('Auto-create failed', e)
-          setMessage('Media created but failed to refresh list')
+          setMessage('Media created but failed to save record')
         } finally {
           setSubmitting(false)
         }
@@ -271,7 +333,8 @@ const MediaPage = () => {
         brand: newMedia.brand || 'Markasouq',
         views: newMedia.views || 0,
         display_order: newMedia.display_order || 0,
-        is_featured: newMedia.is_featured || false
+        is_featured: newMedia.is_featured || false,
+        product_ids: newMedia.product_ids || [],
       }
       if (newMedia.thumbnail_url) payload.thumbnail_url = newMedia.thumbnail_url
       await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
@@ -309,6 +372,11 @@ const MediaPage = () => {
         ) : (
           row.original.url ? <img src={row.original.url} className="w-24 h-16 object-contain" /> : <div className="w-24 h-16 bg-gray-100" />
         )
+      )
+    }),
+    columnHelper.display({
+      id: 'products', header: 'Products', cell: ({ row }) => (
+        <span className="text-xs text-gray-500">{(row.original.product_ids?.length || 0)} linked</span>
       )
     }),
     columnHelper.accessor('views', { header: 'Views', cell: ({ getValue }) => getValue() || 0 }),
@@ -356,13 +424,23 @@ const MediaPage = () => {
                 value={newMedia.brand || ''}
                 onChange={(name) => setNewMedia((p) => ({ ...p, brand: name }))}
               />
-              {/* Fallback manual input */}
               <input
                 type="text"
                 placeholder="Or type brand name manually"
                 value={newMedia.brand || ''}
                 onChange={(e) => setNewMedia((p) => ({ ...p, brand: e.target.value }))}
                 className="mt-2 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400 text-gray-500 placeholder-gray-400"
+              />
+            </div>
+
+            {/* Product Picker */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Linked Products <span className="text-xs text-gray-400 font-normal">(shown on right side of video)</span>
+              </label>
+              <ProductPicker
+                selectedIds={newMedia.product_ids || []}
+                onChange={(ids) => setNewMedia((p) => ({ ...p, product_ids: ids }))}
               />
             </div>
 
@@ -391,17 +469,24 @@ const MediaPage = () => {
               </div>
 
               {uploading && (
-                <div className="mb-2">Uploading: {progress}%</div>
+                <div className="mb-2">
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div className="bg-violet-500 h-2 rounded-full transition-all" style={{ width: `${progress}%` }}></div>
+                  </div>
+                  <span className="text-xs text-gray-500 mt-1 block">Uploading: {progress}%</span>
+                </div>
               )}
 
-              {message && <div className="text-sm text-gray-600 mb-2">{message}</div>}
+              {message && (
+                <div className={`text-sm mb-2 px-3 py-2 rounded ${message.includes('fail') || message.includes('error') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                  {message}
+                </div>
+              )}
 
               <div className="flex items-center gap-3 mb-3">
                 <input id="autoCreate" type="checkbox" checked={autoCreate} onChange={(e) => setAutoCreate(e.target.checked)} />
                 <label htmlFor="autoCreate" className="text-sm">Automatically create media record after upload</label>
               </div>
-
-              {/* Gallery attachment removed from quick-create drawer per UX request. */}
 
               <div className="mb-3">
                 <label className="text-sm block mb-1">Thumbnail (optional)</label>
@@ -421,7 +506,7 @@ const MediaPage = () => {
 
               {newMedia.url && (
                 <div className="mt-3">
-                  <a href={String(newMedia.url)} target="_blank" rel="noreferrer">{String(newMedia.url)}</a>
+                  <a href={String(newMedia.url)} target="_blank" rel="noreferrer" className="text-xs text-violet-600 underline">{String(newMedia.url)}</a>
                 </div>
               )}
             </div>
@@ -438,3 +523,4 @@ const MediaPage = () => {
 
 export const config = defineRouteConfig({ label: 'Media', icon: Photo })
 export default MediaPage
+

@@ -2,6 +2,7 @@ import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { MEDIA_MODULE } from "../../../modules/media"
 import { BRAND_MODULE } from "../../../modules/brands"
 import BrandService from "../../../modules/brands/service"
+import { Knex } from "knex"
 
 export const AUTHENTICATE = false
 
@@ -27,9 +28,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     // Build a brand logo map keyed by brand name for O(1) lookup per media item
     const brandService = req.scope.resolve<BrandService>(BRAND_MODULE)
     const [allBrands] = await brandService.listAndCountBrands({}, { take: 200 })
-    const brandLogoMap = new Map<string, string | null>()
+    const brandLogoMap = new Map<string, { logo_url: string | null; slug: string | null }>()
     for (const b of allBrands) {
-      brandLogoMap.set(b.name, b.logo_url ?? null)
+      brandLogoMap.set(b.name, { logo_url: b.logo_url ?? null, slug: b.slug ?? null })
     }
 
     const getOrigin = () => {
@@ -46,21 +47,73 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       return `${origin}${path}`
     }
 
-    const media = items.map((m: any) => ({
-      id: m.id,
-      url: makeAbsolute(m.url || null),
-      mime_type: m.mime_type || null,
-      title: m.title || null,
-      title_ar: m.title_ar || null,
-      alt_text: m.alt_text || null,
-      thumbnail_url: makeAbsolute(m.thumbnail_url || null),
-      brand: m.brand || null,
-      brand_logo_url: m.brand ? (brandLogoMap.get(m.brand) ?? null) : null,
-      views: m.views ?? 0,
-      display_order: m.display_order ?? 0,
-      is_featured: !!m.is_featured,
-      metadata: m.metadata || null,
-    }))
+    // Collect all product IDs across all media items to batch-fetch them
+    const allProductIds: string[] = []
+    for (const m of items) {
+      const pids = Array.isArray(m.product_ids) ? m.product_ids : []
+      for (const pid of pids) {
+        if (pid && !allProductIds.includes(pid)) allProductIds.push(pid)
+      }
+    }
+
+    // Batch-fetch products from the DB using raw SQL for performance
+    const productMap = new Map<string, any>()
+    if (allProductIds.length > 0) {
+      try {
+        const pgConnection: Knex = req.scope.resolve("__pg_connection__")
+        const placeholders = allProductIds.map((_, i) => `$${i + 1}`).join(', ')
+        const result = await pgConnection.raw(
+          `SELECT p.id, p.title, p.thumbnail,
+                  (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id LIMIT 1) as image_url,
+                  pv.calculated_price
+           FROM product p
+           LEFT JOIN LATERAL (
+             SELECT MIN(mp.amount) as calculated_price
+             FROM money_amount mp
+             JOIN product_variant_money_amount pvma ON pvma.money_amount_id = mp.id
+             JOIN product_variant pvar ON pvar.id = pvma.variant_id
+             WHERE pvar.product_id = p.id
+           ) pv ON true
+           WHERE p.id IN (${placeholders}) AND p.deleted_at IS NULL`,
+          allProductIds
+        )
+        for (const row of result.rows) {
+          productMap.set(row.id, {
+            id: row.id,
+            title: row.title,
+            thumbnail: row.thumbnail || row.image_url || null,
+            price: row.calculated_price ? (row.calculated_price / 100).toFixed(2) : null,
+          })
+        }
+      } catch (err) {
+        console.error('Failed to fetch products for media:', err)
+      }
+    }
+
+    const media = items.map((m: any) => {
+      const brandInfo = m.brand ? brandLogoMap.get(m.brand) : null
+      const pids = Array.isArray(m.product_ids) ? m.product_ids : []
+      const related_products = pids.map((pid: string) => productMap.get(pid)).filter(Boolean)
+
+      return {
+        id: m.id,
+        url: makeAbsolute(m.url || null),
+        mime_type: m.mime_type || null,
+        title: m.title || null,
+        title_ar: m.title_ar || null,
+        alt_text: m.alt_text || null,
+        thumbnail_url: makeAbsolute(m.thumbnail_url || null),
+        brand: m.brand || null,
+        brand_logo_url: brandInfo ? brandInfo.logo_url : null,
+        brand_slug: brandInfo ? brandInfo.slug : null,
+        views: m.views ?? 0,
+        display_order: m.display_order ?? 0,
+        is_featured: !!m.is_featured,
+        product_ids: pids,
+        related_products,
+        metadata: m.metadata || null,
+      }
+    })
 
     res.json({ media, count })
   } catch (e: any) {
