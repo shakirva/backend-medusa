@@ -1,82 +1,50 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import https from "https"
+import axios from "axios"
 
 export const AUTHENTICATE = false
 
-const ODOO_BASE_URL = process.env.ODOO_URL || "https://oskarllc-new-27289548.dev.odoo.com"
-const ODOO_DB = process.env.ODOO_DB || "oskarllc-new-27289548"
-const ODOO_USERNAME = process.env.ODOO_USERNAME || "SYG"
-const ODOO_API_KEY = process.env.ODOO_API_KEY || "fa8410bdf3264b91ea393b9f8341626a98ca262a"
+const ODOO_BASE_URL = "https://oskarllc-new-27289548.dev.odoo.com"
+const ODOO_DB = "oskarllc-new-27289548"
+const ODOO_USERNAME = "SYG"
+const ODOO_API_KEY = "fa8410bdf3264b91ea393b9f8341626a98ca262a"
 
-function odooRpc(path: string, payload: object): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify(payload)
-    const url = new URL(path, ODOO_BASE_URL)
-    const options = {
-      hostname: url.hostname,
-      port: 443,
-      path: url.pathname,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(body),
-      },
-    }
-    const req = https.request(options, (res: any) => {
-      let data = ""
-      res.on("data", (chunk: any) => (data += chunk))
-      res.on("end", () => {
-        try {
-          const parsed = JSON.parse(data)
-          if (parsed.error) reject(new Error(parsed.error.data?.message || "Odoo RPC error"))
-          else resolve(parsed.result)
-        } catch (e) {
-          reject(e)
-        }
-      })
-    })
-    req.on("error", reject)
-    req.write(body)
-    req.end()
+let _requestId = 0
+
+const odooClient = axios.create({
+  baseURL: ODOO_BASE_URL,
+  headers: { "Content-Type": "application/json" },
+  httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+  timeout: 30000,
+})
+
+async function odooJsonRpc(service: string, method: string, args: any[]): Promise<any> {
+  const res = await odooClient.post("/jsonrpc", {
+    jsonrpc: "2.0",
+    method: "call",
+    id: ++_requestId,
+    params: { service, method, args },
   })
+  if (res.data.error) {
+    const msg = res.data.error.data?.message || res.data.error.message || "Odoo error"
+    throw new Error(msg)
+  }
+  return res.data.result
 }
 
 async function getOdooUid(): Promise<number> {
-  return odooRpc("/web/dataset/call_kw", {
-    jsonrpc: "2.0",
-    method: "call",
-    id: 1,
-    params: {
-      model: "res.users",
-      method: "authenticate",
-      args: [],
-      kwargs: {
-        db: ODOO_DB,
-        login: ODOO_USERNAME,
-        password: ODOO_API_KEY,
-      },
-    },
-  })
+  const uid = await odooJsonRpc("common", "authenticate", [ODOO_DB, ODOO_USERNAME, ODOO_API_KEY, {}])
+  if (!uid || typeof uid !== "number") throw new Error("Odoo authentication failed")
+  return uid
 }
 
 async function fetchOdooBrands(uid: number): Promise<any[]> {
-  return odooRpc("/web/dataset/call_kw", {
-    jsonrpc: "2.0",
-    method: "call",
-    id: 2,
-    params: {
-      model: "product.brand",
-      method: "search_read",
-      args: [[]],
-      kwargs: {
-        fields: ["id", "name", "logo"],
-        limit: 100,
-        uid,
-        db: ODOO_DB,
-        password: ODOO_API_KEY,
-      },
-    },
-  })
+  return odooJsonRpc("object", "execute_kw", [
+    ODOO_DB, uid, ODOO_API_KEY,
+    "product.brand", "search_read",
+    [[]],
+    { fields: ["id", "name", "logo"], limit: 100 },
+  ])
 }
 
 /**
@@ -92,7 +60,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const odooBrands: any[] = await fetchOdooBrands(uid)
 
     const brands = odooBrands
-      .filter((b: any) => b.logo) // only brands that have a logo in Odoo
+      .filter((b: any) => b.logo) // only include brands that have a logo set in Odoo
       .map((b: any, index: number) => ({
         id: `odoo_brand_${b.id}`,
         name: b.name,
