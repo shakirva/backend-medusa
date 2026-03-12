@@ -244,137 +244,118 @@ const MediaPage = () => {
   const [createError, setCreateError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const thumbRef = useRef<HTMLInputElement | null>(null)
-  // Track latest uploaded URL/type in a ref so autoCreate can read it without stale closure
-  const uploadedRef = useRef<{ url: string; mime_type: string } | null>(null)
+  // Keep a ref mirror of newMedia so async handlers always read fresh values
+  const newMediaRef = useRef<Partial<Media>>({})
+  const autoCreateRef = useRef(true)
+
+  // Keep refs in sync
+  const updateNewMedia = (updater: (prev: Partial<Media>) => Partial<Media>) => {
+    setNewMedia((prev) => {
+      const next = updater(prev)
+      newMediaRef.current = next
+      return next
+    })
+  }
+
+  const saveMediaRecord = async (uploadedUrl: string, mimeType: string, fileName: string) => {
+    const snap = newMediaRef.current
+    const payload: any = {
+      url: uploadedUrl,
+      title: snap.title || fileName,
+      title_ar: snap.title_ar || null,
+      mime_type: mimeType,
+      brand: snap.brand || 'Markasouq',
+      views: snap.views || 0,
+      display_order: snap.display_order || 0,
+      is_featured: snap.is_featured || false,
+      product_ids: snap.product_ids || [],
+    }
+    if (snap.thumbnail_url) payload.thumbnail_url = snap.thumbnail_url
+    await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
+  }
 
   const handleUpload = async (file: File, isThumbnail = false) => {
     setUploading(true)
     setProgress(0)
     setMessage(null)
+    setCreateError(null)
     try {
       const form = new FormData()
       form.append('file', file)
 
-      let uploadedUrl: string | null = null
+      let uploadedUrl = ''
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest()
         xhr.open('POST', `/admin/media/upload`)
         xhr.withCredentials = true
         xhr.upload.onprogress = (ev) => {
-          if (ev.lengthComputable) {
-            const p = Math.round((ev.loaded / ev.total) * 100)
-            setProgress(p)
-          }
+          if (ev.lengthComputable) setProgress(Math.round((ev.loaded / ev.total) * 100))
         }
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) {
             try {
-              const respData = JSON.parse(xhr.responseText)
-              uploadedUrl = respData.url
+              const resp = JSON.parse(xhr.responseText)
+              uploadedUrl = resp.url || ''
               if (isThumbnail) {
-                setNewMedia((p) => ({ ...p, thumbnail_url: respData.url }))
+                updateNewMedia((p) => ({ ...p, thumbnail_url: resp.url }))
               } else {
-                uploadedRef.current = { url: respData.url, mime_type: file.type }
-                setNewMedia((p) => ({ ...p, url: respData.url, mime_type: file.type }))
+                updateNewMedia((p) => ({ ...p, url: resp.url, mime_type: file.type }))
               }
               setMessage('Upload succeeded')
               resolve()
-            } catch (e) {
+            } catch {
               reject(new Error('Invalid upload response'))
             }
           } else {
-            reject(new Error(`Upload failed: ${xhr.status} — ${xhr.responseText}`))
+            reject(new Error(`Upload failed ${xhr.status}: ${xhr.responseText}`))
           }
         }
         xhr.onerror = () => reject(new Error('Upload network error'))
         xhr.send(form)
       })
 
-      // autoCreate: immediately save the media record using the just-uploaded URL
-      if (!isThumbnail && autoCreate && uploadedUrl) {
+      // Auto-create record right after upload using the ref (always fresh)
+      if (!isThumbnail && autoCreateRef.current && uploadedUrl) {
+        setSubmitting(true)
+        setMessage('Saving media record…')
         try {
-          setSubmitting(true)
-          setMessage('Saving media record…')
-          // Read title/brand/products from current state via functional updater trick
-          // but since we need current state values, we use a ref-based approach:
-          setNewMedia((current) => {
-            // Fire the API call inside the updater to capture fresh state — 
-            // we do it outside via a small async IIFE using the captured current value
-            const snap = { ...current }
-            ;(async () => {
-              try {
-                const payload: any = {
-                  url: uploadedUrl,
-                  title: snap.title || file.name,
-                  title_ar: snap.title_ar || null,
-                  mime_type: file.type,
-                  brand: snap.brand || 'Markasouq',
-                  views: snap.views || 0,
-                  display_order: snap.display_order || 0,
-                  is_featured: snap.is_featured || false,
-                  product_ids: snap.product_ids || [],
-                }
-                if (snap.thumbnail_url) payload.thumbnail_url = snap.thumbnail_url
-                await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
-                setMessage('✅ Media created successfully!')
-                setOpenCreate(false)
-                setNewMedia({})
-                uploadedRef.current = null
-                await refetch()
-              } catch (err: any) {
-                console.error('Auto-create failed', err)
-                setMessage(`❌ Upload saved but record failed: ${err?.message || 'unknown error'}`)
-              } finally {
-                setSubmitting(false)
-              }
-            })()
-            return current // don't actually change state in the updater
-          })
-        } catch (e) {
+          await saveMediaRecord(uploadedUrl, file.type, file.name)
+          setMessage('✅ Media created successfully!')
+          setOpenCreate(false)
+          newMediaRef.current = {}
+          setNewMedia({})
+          await refetch()
+        } catch (err: any) {
+          setMessage(`❌ File uploaded but record save failed: ${err?.message || 'unknown error'}`)
+        } finally {
           setSubmitting(false)
         }
       }
     } catch (e: any) {
-      console.error('Upload failed', e)
-      setMessage(`❌ ${typeof e?.message === 'string' ? e.message : 'Upload failed'}`)
+      setMessage(`❌ ${e?.message || 'Upload failed'}`)
     } finally {
       setUploading(false)
     }
   }
 
   const handleCreate = async () => {
-    // Use the URL from state or from the uploadedRef (in case state update hasn't flushed)
-    const url = newMedia.url || uploadedRef.current?.url
-    const mime_type = newMedia.mime_type || uploadedRef.current?.mime_type
+    const url = newMediaRef.current.url
     if (!url) {
-      setCreateError('Please upload a file first (or enter a URL).')
+      setCreateError('Please upload a file first, then click Create.')
       return
     }
     setCreateError(null)
     setSubmitting(true)
     try {
-      const payload: any = {
-        url,
-        title: newMedia.title || 'Untitled',
-        title_ar: newMedia.title_ar || null,
-        mime_type,
-        brand: newMedia.brand || 'Markasouq',
-        views: newMedia.views || 0,
-        display_order: newMedia.display_order || 0,
-        is_featured: newMedia.is_featured || false,
-        product_ids: newMedia.product_ids || [],
-      }
-      if (newMedia.thumbnail_url) payload.thumbnail_url = newMedia.thumbnail_url
-      await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
+      await saveMediaRecord(url, newMediaRef.current.mime_type || '', 'Untitled')
       setOpenCreate(false)
+      newMediaRef.current = {}
       setNewMedia({})
-      uploadedRef.current = null
       setMessage(null)
       setCreateError(null)
       await refetch()
     } catch (e: any) {
-      console.error('Create media failed', e)
-      setCreateError(e?.message || 'Failed to save media record. Please try again.')
+      setCreateError(e?.message || 'Failed to save. Please try again.')
     } finally {
       setSubmitting(false)
     }
@@ -434,7 +415,7 @@ const MediaPage = () => {
       <DataTable instance={table}>
         <DataTable.Toolbar className="flex items-center justify-between">
           <Heading>Media</Heading>
-          <Button variant="primary" onClick={() => { setOpenCreate(true); setNewMedia({}); setMessage(null); setCreateError(null); uploadedRef.current = null }}>Create Media</Button>
+          <Button variant="primary" onClick={() => { setOpenCreate(true); newMediaRef.current = {}; setNewMedia({}); setMessage(null); setCreateError(null); }}>Create Media</Button>
         </DataTable.Toolbar>
         <DataTable.Table />
         <DataTable.Pagination />
@@ -446,21 +427,21 @@ const MediaPage = () => {
         </Drawer.Header>
         <Drawer.Body>
           <div className="flex flex-col gap-4">
-            <Input placeholder="Title (English)" value={newMedia.title || ''} onChange={(e) => setNewMedia((p) => ({ ...p, title: e.target.value }))} />
-            <Input placeholder="Title (Arabic)" value={newMedia.title_ar || ''} onChange={(e) => setNewMedia((p) => ({ ...p, title_ar: e.target.value }))} dir="rtl" />
+            <Input placeholder="Title (English)" value={newMedia.title || ''} onChange={(e) => updateNewMedia((p) => ({ ...p, title: e.target.value }))} />
+            <Input placeholder="Title (Arabic)" value={newMedia.title_ar || ''} onChange={(e) => updateNewMedia((p) => ({ ...p, title_ar: e.target.value }))} dir="rtl" />
 
             {/* Brand Logo Picker */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Brand</label>
               <BrandLogoPicker
                 value={newMedia.brand || ''}
-                onChange={(name) => setNewMedia((p) => ({ ...p, brand: name }))}
+                onChange={(name) => updateNewMedia((p) => ({ ...p, brand: name }))}
               />
               <input
                 type="text"
                 placeholder="Or type brand name manually"
                 value={newMedia.brand || ''}
-                onChange={(e) => setNewMedia((p) => ({ ...p, brand: e.target.value }))}
+                onChange={(e) => updateNewMedia((p) => ({ ...p, brand: e.target.value }))}
                 className="mt-2 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400 text-gray-500 placeholder-gray-400"
               />
             </div>
@@ -472,19 +453,19 @@ const MediaPage = () => {
               </label>
               <ProductPicker
                 selectedIds={newMedia.product_ids || []}
-                onChange={(ids) => setNewMedia((p) => ({ ...p, product_ids: ids }))}
+                onChange={(ids) => updateNewMedia((p) => ({ ...p, product_ids: ids }))}
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <Input placeholder="Display Order" type="number" value={newMedia.display_order || 0} onChange={(e) => setNewMedia((p) => ({ ...p, display_order: parseInt(e.target.value) || 0 }))} />
-              <Input placeholder="Initial Views" type="number" value={newMedia.views || 0} onChange={(e) => setNewMedia((p) => ({ ...p, views: parseInt(e.target.value) || 0 }))} />
+              <Input placeholder="Display Order" type="number" value={newMedia.display_order || 0} onChange={(e) => updateNewMedia((p) => ({ ...p, display_order: parseInt(e.target.value) || 0 }))} />
+              <Input placeholder="Initial Views" type="number" value={newMedia.views || 0} onChange={(e) => updateNewMedia((p) => ({ ...p, views: parseInt(e.target.value) || 0 }))} />
             </div>
             <div className="flex items-center gap-3">
-              <input id="isFeatured" type="checkbox" checked={!!newMedia.is_featured} onChange={(e) => setNewMedia((p) => ({ ...p, is_featured: e.target.checked }))} />
+              <input id="isFeatured" type="checkbox" checked={!!newMedia.is_featured} onChange={(e) => updateNewMedia((p) => ({ ...p, is_featured: e.target.checked }))} />
               <label htmlFor="isFeatured" className="text-sm">Featured Video (show prominently)</label>
             </div>
-            <Input placeholder="Mime Type (auto-detected)" value={newMedia.mime_type || ''} onChange={(e) => setNewMedia((p) => ({ ...p, mime_type: e.target.value }))} />
+            <Input placeholder="Mime Type (auto-detected)" value={newMedia.mime_type || ''} onChange={(e) => updateNewMedia((p) => ({ ...p, mime_type: e.target.value }))} />
             <div>
               <div
                 onDragOver={(e) => e.preventDefault()}
@@ -516,7 +497,7 @@ const MediaPage = () => {
               )}
 
               <div className="flex items-center gap-3 mb-3">
-                <input id="autoCreate" type="checkbox" checked={autoCreate} onChange={(e) => setAutoCreate(e.target.checked)} />
+                <input id="autoCreate" type="checkbox" checked={autoCreate} onChange={(e) => { setAutoCreate(e.target.checked); autoCreateRef.current = e.target.checked }} />
                 <label htmlFor="autoCreate" className="text-sm">Automatically create media record after upload</label>
               </div>
 
@@ -528,7 +509,7 @@ const MediaPage = () => {
                   {newMedia.thumbnail_url ? (
                     <div className="flex items-center gap-2">
                       <img src={String(newMedia.thumbnail_url)} className="w-24 h-16 object-contain" />
-                      <Button variant="danger" size="small" onClick={() => setNewMedia((p) => ({ ...p, thumbnail_url: undefined }))}><Trash /></Button>
+                      <Button variant="danger" size="small" onClick={() => updateNewMedia((p) => ({ ...p, thumbnail_url: undefined }))}><Trash /></Button>
                     </div>
                   ) : (
                     <div className="text-xs text-gray-500">Optional poster image for videos</div>
@@ -551,9 +532,9 @@ const MediaPage = () => {
             </div>
           )}
           <div className="flex gap-2 w-full justify-end">
-            <Drawer.Close asChild><Button variant="secondary" onClick={() => { setNewMedia({}); setMessage(null); setCreateError(null); uploadedRef.current = null }}>Cancel</Button></Drawer.Close>
+            <Drawer.Close asChild><Button variant="secondary" onClick={() => { newMediaRef.current = {}; setNewMedia({}); setMessage(null); setCreateError(null); }}>Cancel</Button></Drawer.Close>
             <Button isLoading={submitting} onClick={handleCreate}>
-              {newMedia.url || uploadedRef.current ? 'Create' : 'Create (upload file first)'}
+              {newMediaRef.current.url ? 'Create' : 'Create (upload file first)'}
             </Button>
           </div>
         </Drawer.Footer>
