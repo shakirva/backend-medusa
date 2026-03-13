@@ -247,6 +247,8 @@ const MediaPage = () => {
   // Keep a ref mirror of newMedia so async handlers always read fresh values
   const newMediaRef = useRef<Partial<Media>>({})
   const autoCreateRef = useRef(true)
+  // Dedicated ref for the main uploaded URL — never overwritten by thumbnail uploads
+  const uploadedFileUrlRef = useRef<string>('')
 
   // Keep refs in sync
   const updateNewMedia = (updater: (prev: Partial<Media>) => Partial<Media>) => {
@@ -367,6 +369,7 @@ const MediaPage = () => {
               } else {
                 // Update both state/ref AND a stable local variable for the autoCreate path
                 uploadedUrl = resp.url || ''
+                uploadedFileUrlRef.current = uploadedUrl  // dedicated ref — never wiped by thumbnail uploads
                 updateNewMedia((p) => ({ ...p, url: uploadedUrl, mime_type: file.type }))
                 // Also set directly on ref right now (before any async batching)
                 newMediaRef.current = { ...newMediaRef.current, url: uploadedUrl, mime_type: file.type }
@@ -414,6 +417,7 @@ const MediaPage = () => {
           setOpenCreate(false)
           newMediaRef.current = {}
           setNewMedia({})
+          uploadedFileUrlRef.current = ''
           await refetch()
         } catch (err: any) {
           setMessage(`❌ File uploaded but record save failed: ${err?.message || 'unknown error'}`)
@@ -429,7 +433,8 @@ const MediaPage = () => {
   }
 
   const handleCreate = async () => {
-    const url = newMediaRef.current.url
+    // Use dedicated ref — never wiped by thumbnail uploads
+    const url = uploadedFileUrlRef.current || newMediaRef.current.url
     if (!url) {
       setCreateError('Please upload a file first, then click Create.')
       return
@@ -457,6 +462,7 @@ const MediaPage = () => {
       setOpenCreate(false)
       newMediaRef.current = {}
       setNewMedia({})
+      uploadedFileUrlRef.current = ''
       setMessage(null)
       setCreateError(null)
       await refetch()
@@ -638,9 +644,9 @@ const MediaPage = () => {
             </div>
           )}
           <div className="flex gap-2 w-full justify-end">
-            <Drawer.Close asChild><Button variant="secondary" onClick={() => { newMediaRef.current = {}; setNewMedia({}); setMessage(null); setCreateError(null); }}>Cancel</Button></Drawer.Close>
+            <Drawer.Close asChild><Button variant="secondary" onClick={() => { newMediaRef.current = {}; setNewMedia({}); uploadedFileUrlRef.current = ''; setMessage(null); setCreateError(null); }}>Cancel</Button></Drawer.Close>
             <Button isLoading={submitting} onClick={handleCreate}>
-              {newMedia.url ? 'Create' : 'Create (upload file first)'}
+              {(newMedia.url || uploadedFileUrlRef.current) ? 'Create' : 'Create (upload file first)'}
             </Button>
           </div>
         </Drawer.Footer>
