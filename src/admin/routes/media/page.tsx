@@ -354,7 +354,11 @@ const MediaPage = () => {
               if (isThumbnail) {
                 updateNewMedia((p) => ({ ...p, thumbnail_url: resp.url }))
               } else {
-                updateNewMedia((p) => ({ ...p, url: resp.url, mime_type: file.type }))
+                // Update both state/ref AND a stable local variable for the autoCreate path
+                uploadedUrl = resp.url || ''
+                updateNewMedia((p) => ({ ...p, url: uploadedUrl, mime_type: file.type }))
+                // Also set directly on ref right now (before any async batching)
+                newMediaRef.current = { ...newMediaRef.current, url: uploadedUrl, mime_type: file.type }
               }
               setMessage('Upload succeeded')
               resolve()
@@ -625,7 +629,7 @@ const MediaPage = () => {
           <div className="flex gap-2 w-full justify-end">
             <Drawer.Close asChild><Button variant="secondary" onClick={() => { newMediaRef.current = {}; setNewMedia({}); setMessage(null); setCreateError(null); }}>Cancel</Button></Drawer.Close>
             <Button isLoading={submitting} onClick={handleCreate}>
-              {newMediaRef.current.url ? 'Create' : 'Create (upload file first)'}
+              {newMedia.url ? 'Create' : 'Create (upload file first)'}
             </Button>
           </div>
         </Drawer.Footer>
