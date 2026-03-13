@@ -326,7 +326,18 @@ const MediaPage = () => {
       product_ids: snap.product_ids || [],
     }
     if (snap.thumbnail_url) payload.thumbnail_url = snap.thumbnail_url
-    await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
+
+    // Use native fetch with credentials — sdk.client.fetch may not serialize body correctly
+    const res = await fetch('/admin/media', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      throw new Error(`Save failed (${res.status}): ${errText}`)
+    }
   }
 
   const handleUpload = async (file: File, isThumbnail = false) => {
