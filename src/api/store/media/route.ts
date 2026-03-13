@@ -1,4 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { MEDIA_MODULE } from "../../../modules/media"
 import { BRAND_MODULE } from "../../../modules/brands"
 import BrandService from "../../../modules/brands/service"
@@ -61,7 +62,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const productMap = new Map<string, any>()
     if (allProductIds.length > 0) {
       try {
-        const pgConnection: Knex = req.scope.resolve("__pg_connection__")
+        const pgConnection: Knex = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
         const placeholders = allProductIds.map((_, i) => `$${i + 1}`).join(', ')
         const result = await pgConnection.raw(
           `SELECT DISTINCT ON (p.id)
