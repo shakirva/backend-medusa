@@ -63,7 +63,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     if (allProductIds.length > 0) {
       try {
         const pgConnection: Knex = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
-        const placeholders = allProductIds.map((_, i) => `$${i + 1}`).join(', ')
+        // Knex raw() uses ? placeholders (not $1,$2), and bindings must be wrapped in an object {bindings:[]}
+        const placeholders = allProductIds.map(() => '?').join(', ')
         const result = await pgConnection.raw(
           `SELECT DISTINCT ON (p.id)
                   p.id, p.title, p.handle, p.thumbnail,
