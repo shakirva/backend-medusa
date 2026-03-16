@@ -29,7 +29,7 @@ async function resolveOrderAndSend(
     const orderService = container.resolve(Modules.ORDER);
 
     const order = await orderService.retrieveOrder(orderId, {
-      relations: ["items", "shipping_address", "customer"],
+      relations: ["items", "shipping_address"],
     });
 
     if (!order.email) {
@@ -39,7 +39,6 @@ async function resolveOrderAndSend(
 
     const customerName =
       order.shipping_address?.first_name ||
-      (order as any).customer?.first_name ||
       "Valued Customer";
 
     const shippingAddress = order.shipping_address

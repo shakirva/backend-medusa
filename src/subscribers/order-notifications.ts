@@ -19,7 +19,7 @@ export default async function orderPlacedHandler({
   try {
     // Get order details
     const order = await orderService.retrieveOrder(data.id, {
-      relations: ["items", "shipping_address", "customer"],
+      relations: ["items", "shipping_address"],
     });
 
     if (!order.email) {

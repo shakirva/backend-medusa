@@ -208,7 +208,7 @@ export default async function orderCreatedHandler({
     // Get order details
     const orderService = container.resolve("order")
     const order = await orderService.retrieveOrder(orderId, {
-      relations: ["items", "items.variant", "shipping_address", "customer"]
+      relations: ["items", "items.variant", "shipping_address"]
     })
     
     // Authenticate with Odoo
