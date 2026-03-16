@@ -62,7 +62,7 @@ async function resolveOrderAndSend(
       unit_price: item.unit_price || 0,
     }));
     const calculatedSubtotal = orderItems.reduce(
-      (sum, item) => sum + item.unit_price * item.quantity,
+      (sum: number, item: { unit_price: number; quantity: number }) => sum + item.unit_price * item.quantity,
       0
     );
 
