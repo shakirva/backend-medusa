@@ -55,17 +55,24 @@ async function resolveOrderAndSend(
     // Pull tracking info from order metadata (set by Odoo webhook)
     const metadata: Record<string, any> = (order as any).metadata || {};
 
+    // Calculate totals from items (Medusa v2 order.total/subtotal are not populated on retrieveOrder)
+    const orderItems = (order.items || []).map((item: any) => ({
+      title: item.title || item.product_title || "Product",
+      quantity: item.quantity,
+      unit_price: item.unit_price || 0,
+    }));
+    const calculatedSubtotal = orderItems.reduce(
+      (sum, item) => sum + item.unit_price * item.quantity,
+      0
+    );
+
     await sendOrderStatusEmail(emailType, order.email, {
       customerName,
       orderId: order.id,
       displayId: order.display_id,
-      items: (order.items || []).map((item: any) => ({
-        title: item.title || item.product_title || "Product",
-        quantity: item.quantity,
-        unit_price: item.unit_price || 0,
-      })),
-      total: Number(order.total || 0),
-      subtotal: Number(order.subtotal || 0),
+      items: orderItems,
+      total: calculatedSubtotal,
+      subtotal: calculatedSubtotal,
       currencyCode: order.currency_code || "kwd",
       shippingAddress,
       trackingNumber: extraData.tracking_number || metadata.tracking_number,
