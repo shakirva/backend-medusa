@@ -28,7 +28,7 @@ export default async function orderCompletedHandler({
 
     const customerName =
       order.shipping_address?.first_name ||
-      order.customer?.first_name ||
+      (order as any).customer?.first_name ||
       "Valued Customer";
 
     const shippingAddress = order.shipping_address
