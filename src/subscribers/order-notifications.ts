@@ -2,8 +2,9 @@ import {
   SubscriberArgs,
   SubscriberConfig,
 } from "@medusajs/framework";
-import { Modules } from "@medusajs/framework/utils";
+import { Modules, ContainerRegistrationKeys } from "@medusajs/framework/utils";
 import { sendOrderStatusEmail } from "../lib/email";
+import { sendPushNotification } from "../lib/firebase";
 
 /**
  * Order Placed Notification Subscriber
@@ -16,6 +17,7 @@ export default async function orderPlacedHandler({
 }: SubscriberArgs<{ id: string }>) {
   const orderService = container.resolve(Modules.ORDER);
   const logger = container.resolve("logger");
+  const pgConnection = container.resolve(ContainerRegistrationKeys.PG_CONNECTION);
 
   try {
     // Get order details
@@ -54,6 +56,7 @@ export default async function orderPlacedHandler({
           .join(", ")
       : undefined;
 
+    // ── Send Email ──────────────────────────────────────────────────────────
     await sendOrderStatusEmail("order.confirmed", order.email, {
       customerName,
       orderId: order.id,
@@ -68,6 +71,37 @@ export default async function orderPlacedHandler({
     logger.info(
       `[OrderEmail] ✅ Order confirmation sent to ${order.email} for order #${order.display_id}`
     );
+
+    // ── Send Push Notification ───────────────────────────────────────────────
+    // Find the customer's FCM token from their metadata
+    if (order.customer_id) {
+      try {
+        const customerResult = await pgConnection.raw(
+          `SELECT metadata FROM customer WHERE id = ?`,
+          [order.customer_id]
+        );
+        const fcmToken = customerResult.rows?.[0]?.metadata?.fcm_token;
+
+        if (fcmToken) {
+          await sendPushNotification({
+            fcmToken,
+            title: "Order Confirmed! 🎉",
+            body: `Your order #${order.display_id} has been placed successfully.`,
+            data: {
+              type: "order.placed",
+              order_id: order.id,
+              display_id: String(order.display_id),
+            },
+          });
+          logger.info(`[FCM] ✅ Push notification sent for order #${order.display_id}`);
+        } else {
+          logger.info(`[FCM] No FCM token for customer ${order.customer_id} — skipping push`);
+        }
+      } catch (pushError: any) {
+        // Never fail the subscriber because of push — email already sent
+        logger.warn(`[FCM] Push notification failed: ${pushError.message}`);
+      }
+    }
   } catch (error: any) {
     logger.error(`[OrderEmail] ❌ Failed to send order confirmation for ${data.id}: ${error.message}`);
   }

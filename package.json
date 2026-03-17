@@ -54,6 +54,7 @@
     "@types/nodemailer": "^7.0.11",
     "awilix": "^8.0.1",
     "axios": "^1.13.6",
+    "firebase-admin": "^13.7.0",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^8.0.2",
     "pg": "^8.13.0",
