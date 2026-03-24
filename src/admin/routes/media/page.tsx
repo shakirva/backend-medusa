@@ -1,5 +1,5 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk"
-import { Photo, Trash } from "@medusajs/icons"
+import { Photo, PencilSquare } from "@medusajs/icons"
 import { Container, Heading, Button, Input, createDataTableColumnHelper, DataTable, DataTablePaginationState, useDataTable, Drawer, Badge } from "@medusajs/ui"
 import { useRef, useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
@@ -239,18 +239,27 @@ const MediaPage = () => {
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
-  const [autoCreate, setAutoCreate] = useState(true)
   const [message, setMessage] = useState<string | null>(null)
-  const [createError, setCreateError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
-  const thumbRef = useRef<HTMLInputElement | null>(null)
+
+  // ── Edit state ─────────────────────────────────────────────────────────────
+  const [openEdit, setOpenEdit] = useState(false)
+  const [editMedia, setEditMedia] = useState<Partial<Media>>({})
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [editMessage, setEditMessage] = useState<string | null>(null)
+  // ──────────────────────────────────────────────────────────────────────────
   // Keep a ref mirror of newMedia so async handlers always read fresh values
   const newMediaRef = useRef<Partial<Media>>({})
-  const autoCreateRef = useRef(true)
-  // Dedicated ref for the main uploaded URL — never overwritten by thumbnail uploads
-  const uploadedFileUrlRef = useRef<string>('')
 
-  // Keep refs in sync
+  const closeAll = () => {
+    setOpenCreate(false)
+    setOpenEdit(false)
+    setMessage(null)
+    setEditMessage(null)
+    newMediaRef.current = {}
+    setNewMedia({})
+  }
+
   const updateNewMedia = (updater: (prev: Partial<Media>) => Partial<Media>) => {
     setNewMedia((prev) => {
       const next = updater(prev)
@@ -259,94 +268,10 @@ const MediaPage = () => {
     })
   }
 
-  // Capture a thumbnail frame from a video file (client-side, at 1 second)
-  const captureVideoThumbnail = (file: File): Promise<File | null> => {
-    return new Promise((resolve) => {
-      try {
-        const video = document.createElement('video')
-        const url = URL.createObjectURL(file)
-        video.src = url
-        video.muted = true
-        video.playsInline = true
-        video.currentTime = 1
-        const cleanup = () => URL.revokeObjectURL(url)
-        video.onloadeddata = () => {
-          video.currentTime = 1
-        }
-        video.onseeked = () => {
-          try {
-            const canvas = document.createElement('canvas')
-            canvas.width = video.videoWidth || 640
-            canvas.height = video.videoHeight || 360
-            const ctx = canvas.getContext('2d')
-            if (!ctx) { cleanup(); return resolve(null) }
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-            canvas.toBlob((blob) => {
-              cleanup()
-              if (!blob) return resolve(null)
-              const thumbFile = new File([blob], 'thumbnail.jpg', { type: 'image/jpeg' })
-              resolve(thumbFile)
-            }, 'image/jpeg', 0.85)
-          } catch { cleanup(); resolve(null) }
-        }
-        video.onerror = () => { cleanup(); resolve(null) }
-        // Fallback timeout
-        setTimeout(() => { cleanup(); resolve(null) }, 8000)
-      } catch { resolve(null) }
-    })
-  }
-
-  // Upload a file to the server, returns the URL or null on failure
-  const uploadFile = (file: File): Promise<string | null> => {
-    return new Promise((resolve) => {
-      const form = new FormData()
-      form.append('file', file)
-      const xhr = new XMLHttpRequest()
-      xhr.open('POST', `/admin/media/upload`)
-      xhr.withCredentials = true
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try { resolve(JSON.parse(xhr.responseText)?.url || null) } catch { resolve(null) }
-        } else { resolve(null) }
-      }
-      xhr.onerror = () => resolve(null)
-      xhr.send(form)
-    })
-  }
-
-  const saveMediaRecord = async (uploadedUrl: string, mimeType: string, fileName: string) => {
-    const snap = newMediaRef.current
-    const payload: any = {
-      url: uploadedUrl,
-      title: snap.title || fileName,
-      title_ar: snap.title_ar || null,
-      mime_type: mimeType,
-      brand: snap.brand || 'Markasouq',
-      views: snap.views || 0,
-      display_order: snap.display_order || 0,
-      is_featured: snap.is_featured || false,
-      product_ids: snap.product_ids || [],
-    }
-    if (snap.thumbnail_url) payload.thumbnail_url = snap.thumbnail_url
-
-    // Use native fetch with credentials — sdk.client.fetch may not serialize body correctly
-    const res = await fetch('/admin/media', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '')
-      throw new Error(`Save failed (${res.status}): ${errText}`)
-    }
-  }
-
-  const handleUpload = async (file: File, isThumbnail = false) => {
+  const handleUpload = async (file: File) => {
     setUploading(true)
     setProgress(0)
     setMessage(null)
-    setCreateError(null)
     try {
       const form = new FormData()
       form.append('file', file)
@@ -364,111 +289,50 @@ const MediaPage = () => {
             try {
               const resp = JSON.parse(xhr.responseText)
               uploadedUrl = resp.url || ''
-              if (isThumbnail) {
-                updateNewMedia((p) => ({ ...p, thumbnail_url: resp.url }))
-              } else {
-                // Update both state/ref AND a stable local variable for the autoCreate path
-                uploadedUrl = resp.url || ''
-                uploadedFileUrlRef.current = uploadedUrl  // dedicated ref — never wiped by thumbnail uploads
-                updateNewMedia((p) => ({ ...p, url: uploadedUrl, mime_type: file.type }))
-                // Also set directly on ref right now (before any async batching)
-                newMediaRef.current = { ...newMediaRef.current, url: uploadedUrl, mime_type: file.type }
-              }
-              setMessage('Upload succeeded')
+              newMediaRef.current = { ...newMediaRef.current, url: uploadedUrl, mime_type: file.type }
+              updateNewMedia((p) => ({ ...p, url: uploadedUrl, mime_type: file.type }))
               resolve()
-            } catch {
-              reject(new Error('Invalid upload response'))
-            }
-          } else {
-            reject(new Error(`Upload failed ${xhr.status}: ${xhr.responseText}`))
-          }
+            } catch { reject(new Error('Invalid upload response')) }
+          } else { reject(new Error(`Upload failed ${xhr.status}`)) }
         }
         xhr.onerror = () => reject(new Error('Upload network error'))
         xhr.send(form)
       })
 
-      // Auto-create record right after upload using the ref (always fresh)
-      if (!isThumbnail && autoCreateRef.current && uploadedUrl) {
-        setSubmitting(true)
-
-        // Auto-capture thumbnail from video before saving
-        let autoThumbUrl: string | null = newMediaRef.current.thumbnail_url || null
-        if (!autoThumbUrl && file.type.startsWith('video/')) {
-          setMessage('Generating thumbnail…')
-          try {
-            const thumbFile = await captureVideoThumbnail(file)
-            if (thumbFile) {
-              setMessage('Uploading thumbnail…')
-              const tUrl = await uploadFile(thumbFile)
-              if (tUrl) {
-                autoThumbUrl = tUrl
-                updateNewMedia((p) => ({ ...p, thumbnail_url: tUrl }))
-              }
-            }
-          } catch { /* thumbnail is optional, continue */ }
-        }
-
-        setMessage('Saving media record…')
-        try {
-          // Temporarily inject the thumbnail into the ref so saveMediaRecord picks it up
-          if (autoThumbUrl) newMediaRef.current = { ...newMediaRef.current, thumbnail_url: autoThumbUrl }
-          await saveMediaRecord(uploadedUrl, file.type, file.name)
-          setMessage('✅ Media created successfully!')
-          setOpenCreate(false)
-          newMediaRef.current = {}
-          setNewMedia({})
-          uploadedFileUrlRef.current = ''
-          await refetch()
-        } catch (err: any) {
-          setMessage(`❌ File uploaded but record save failed: ${err?.message || 'unknown error'}`)
-        } finally {
-          setSubmitting(false)
-        }
+      // Auto-save the record immediately after upload
+      setSubmitting(true)
+      setMessage('Saving…')
+      const snap = newMediaRef.current
+      const payload: any = {
+        url: uploadedUrl,
+        title: snap.title || file.name,
+        title_ar: snap.title_ar || null,
+        mime_type: file.type,
+        brand: snap.brand || 'Markasouq',
+        views: snap.views || 0,
+        display_order: snap.display_order || 0,
+        is_featured: snap.is_featured || false,
+        product_ids: snap.product_ids || [],
       }
+      const res = await fetch('/admin/media', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '')
+        throw new Error(`Save failed (${res.status}): ${errText}`)
+      }
+      setMessage('✅ Media created successfully!')
+      setOpenCreate(false)
+      newMediaRef.current = {}
+      setNewMedia({})
+      await refetch()
     } catch (e: any) {
       setMessage(`❌ ${e?.message || 'Upload failed'}`)
     } finally {
       setUploading(false)
-    }
-  }
-
-  const handleCreate = async () => {
-    // Use dedicated ref — never wiped by thumbnail uploads
-    const url = uploadedFileUrlRef.current || newMediaRef.current.url
-    if (!url) {
-      setCreateError('Please upload a file first, then click Create.')
-      return
-    }
-    setCreateError(null)
-    setSubmitting(true)
-
-    // Auto-capture thumbnail if not already set and URL is a video
-    if (!newMediaRef.current.thumbnail_url && newMediaRef.current.mime_type?.startsWith('video/')) {
-      setMessage('Generating thumbnail…')
-      try {
-        const resp = await fetch(newMediaRef.current.url || '')
-        const blob = await resp.blob()
-        const videoFile = new File([blob], 'video.mp4', { type: blob.type })
-        const thumbFile = await captureVideoThumbnail(videoFile)
-        if (thumbFile) {
-          const tUrl = await uploadFile(thumbFile)
-          if (tUrl) newMediaRef.current = { ...newMediaRef.current, thumbnail_url: tUrl }
-        }
-      } catch { /* optional */ }
-    }
-
-    try {
-      await saveMediaRecord(url, newMediaRef.current.mime_type || '', 'Untitled')
-      setOpenCreate(false)
-      newMediaRef.current = {}
-      setNewMedia({})
-      uploadedFileUrlRef.current = ''
-      setMessage(null)
-      setCreateError(null)
-      await refetch()
-    } catch (e: any) {
-      setCreateError(e?.message || 'Failed to save. Please try again.')
-    } finally {
       setSubmitting(false)
     }
   }
@@ -477,6 +341,46 @@ const MediaPage = () => {
     if (!confirm('Delete this media?')) return
     await sdk.client.fetch(`/admin/media/${id}`, { method: 'DELETE' })
     await refetch()
+  }
+
+  const handleEditOpen = (item: Media) => {
+    closeAll()
+    setEditMedia({ ...item })
+    setOpenEdit(true)
+  }
+
+  const handleEditSave = async () => {
+    if (!editMedia.id) return
+    setEditSubmitting(true)
+    setEditMessage(null)
+    try {
+      const res = await fetch(`/admin/media/${editMedia.id}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: editMedia.title || '',
+          title_ar: editMedia.title_ar || null,
+          brand: editMedia.brand || 'Markasouq',
+          views: editMedia.views || 0,
+          display_order: editMedia.display_order || 0,
+          is_featured: editMedia.is_featured || false,
+          product_ids: editMedia.product_ids || [],
+          thumbnail_url: editMedia.thumbnail_url || null,
+        }),
+      })
+      if (!res.ok) {
+        const t = await res.text().catch(() => '')
+        throw new Error(`Save failed (${res.status}): ${t}`)
+      }
+      setEditMessage('✅ Saved successfully!')
+      await refetch()
+      setTimeout(() => { setOpenEdit(false); setEditMessage(null) }, 800)
+    } catch (e: any) {
+      setEditMessage(`❌ ${e?.message || 'Failed to save'}`)
+    } finally {
+      setEditSubmitting(false)
+    }
   }
 
   const columns = [
@@ -514,6 +418,9 @@ const MediaPage = () => {
     columnHelper.display({
       id: 'actions', header: 'Actions', cell: ({ row }) => (
         <div className="flex gap-2">
+          <Button size="small" variant="secondary" onClick={() => handleEditOpen(row.original)}>
+            <PencilSquare className="mr-1" />Edit
+          </Button>
           <Button size="small" variant="danger" onClick={() => handleDelete(row.original.id)}>Delete</Button>
         </div>
       )
@@ -527,13 +434,14 @@ const MediaPage = () => {
       <DataTable instance={table}>
         <DataTable.Toolbar className="flex items-center justify-between">
           <Heading>Media</Heading>
-          <Button variant="primary" onClick={() => { setOpenCreate(true); newMediaRef.current = {}; setNewMedia({}); setMessage(null); setCreateError(null); }}>Create Media</Button>
+          <Button variant="primary" onClick={() => { closeAll(); setOpenCreate(true); }}>Create Media</Button>
         </DataTable.Toolbar>
         <DataTable.Table />
         <DataTable.Pagination />
       </DataTable>
 
-      <Drawer open={openCreate} onOpenChange={setOpenCreate}>
+      {/* ── Single Drawer — Create mode ─────────────────────────────── */}
+      <Drawer open={openCreate} onOpenChange={(open) => { if (!open) closeAll() }}>
         <Drawer.Header>
           <Drawer.Title>Create Media</Drawer.Title>
         </Drawer.Header>
@@ -541,116 +449,101 @@ const MediaPage = () => {
           <div className="flex flex-col gap-4">
             <Input placeholder="Title (English)" value={newMedia.title || ''} onChange={(e) => updateNewMedia((p) => ({ ...p, title: e.target.value }))} />
             <Input placeholder="Title (Arabic)" value={newMedia.title_ar || ''} onChange={(e) => updateNewMedia((p) => ({ ...p, title_ar: e.target.value }))} dir="rtl" />
-
-            {/* Brand Logo Picker */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Brand</label>
-              <BrandLogoPicker
-                value={newMedia.brand || ''}
-                onChange={(name) => updateNewMedia((p) => ({ ...p, brand: name }))}
-              />
-              <input
-                type="text"
-                placeholder="Or type brand name manually"
-                value={newMedia.brand || ''}
-                onChange={(e) => updateNewMedia((p) => ({ ...p, brand: e.target.value }))}
-                className="mt-2 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400 text-gray-500 placeholder-gray-400"
-              />
+              <BrandLogoPicker value={newMedia.brand || ''} onChange={(name) => updateNewMedia((p) => ({ ...p, brand: name }))} />
             </div>
-
-            {/* Product Picker */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
                 Linked Products <span className="text-xs text-gray-400 font-normal">(shown on right side of video)</span>
               </label>
-              <ProductPicker
-                selectedIds={newMedia.product_ids || []}
-                onChange={(ids) => updateNewMedia((p) => ({ ...p, product_ids: ids }))}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Input placeholder="Display Order" type="number" value={newMedia.display_order || 0} onChange={(e) => updateNewMedia((p) => ({ ...p, display_order: parseInt(e.target.value) || 0 }))} />
-              <Input placeholder="Initial Views" type="number" value={newMedia.views || 0} onChange={(e) => updateNewMedia((p) => ({ ...p, views: parseInt(e.target.value) || 0 }))} />
+              <ProductPicker selectedIds={newMedia.product_ids || []} onChange={(ids) => updateNewMedia((p) => ({ ...p, product_ids: ids }))} />
             </div>
             <div className="flex items-center gap-3">
               <input id="isFeatured" type="checkbox" checked={!!newMedia.is_featured} onChange={(e) => updateNewMedia((p) => ({ ...p, is_featured: e.target.checked }))} />
               <label htmlFor="isFeatured" className="text-sm">Featured Video (show prominently)</label>
             </div>
-            <Input placeholder="Mime Type (auto-detected)" value={newMedia.mime_type || ''} onChange={(e) => updateNewMedia((p) => ({ ...p, mime_type: e.target.value }))} />
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Upload File <span className="text-xs text-gray-400 font-normal">(image or video — saves automatically)</span>
+              </label>
               <div
                 onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  const f = e.dataTransfer?.files?.[0]
-                  if (f) handleUpload(f)
-                }}
-                className="p-4 border-dashed border-2 border-gray-300 rounded mb-3 text-center"
+                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) handleUpload(f) }}
+                className="p-6 border-dashed border-2 border-gray-300 rounded-lg text-center hover:border-violet-400 transition-colors"
               >
-                <div className="mb-2">Drag &amp; drop an image or video here, or</div>
                 <input ref={fileRef} type="file" accept="image/*,video/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f) }} />
-                <Button onClick={() => fileRef.current?.click()} isLoading={uploading} variant="secondary">Select File</Button>
+                <p className="text-sm text-gray-500 mb-3">Drag &amp; drop an image or video here, or</p>
+                <Button onClick={() => fileRef.current?.click()} isLoading={uploading || submitting} variant="secondary">
+                  {uploading ? `Uploading ${progress}%…` : submitting ? 'Saving…' : 'Select File'}
+                </Button>
               </div>
-
-              {uploading && (
-                <div className="mb-2">
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-violet-500 h-2 rounded-full transition-all" style={{ width: `${progress}%` }}></div>
-                  </div>
-                  <span className="text-xs text-gray-500 mt-1 block">Uploading: {progress}%</span>
-                </div>
-              )}
-
               {message && (
-                <div className={`text-sm mb-2 px-3 py-2 rounded ${message.includes('fail') || message.includes('error') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                <div className={`mt-2 text-sm px-3 py-2 rounded ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
                   {message}
-                </div>
-              )}
-
-              <div className="flex items-center gap-3 mb-3">
-                <input id="autoCreate" type="checkbox" checked={autoCreate} onChange={(e) => { setAutoCreate(e.target.checked); autoCreateRef.current = e.target.checked }} />
-                <label htmlFor="autoCreate" className="text-sm">Automatically create media record after upload</label>
-              </div>
-
-              <div className="mb-3">
-                <label className="text-sm block mb-1">Thumbnail (optional)</label>
-                <div className="flex items-center gap-2">
-                  <input ref={thumbRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f, true) }} />
-                  <Button onClick={() => thumbRef.current?.click()} isLoading={uploading} variant="secondary">Upload Thumbnail</Button>
-                  {newMedia.thumbnail_url ? (
-                    <div className="flex items-center gap-2">
-                      <img src={String(newMedia.thumbnail_url)} className="w-24 h-16 object-contain" />
-                      <Button variant="danger" size="small" onClick={() => updateNewMedia((p) => ({ ...p, thumbnail_url: undefined }))}><Trash /></Button>
-                    </div>
-                  ) : (
-                    <div className="text-xs text-gray-500">Optional poster image for videos</div>
-                  )}
-                </div>
-              </div>
-
-              {newMedia.url && (
-                <div className="mt-3">
-                  <a href={String(newMedia.url)} target="_blank" rel="noreferrer" className="text-xs text-violet-600 underline">{String(newMedia.url)}</a>
                 </div>
               )}
             </div>
           </div>
         </Drawer.Body>
         <Drawer.Footer>
-          {createError && (
-            <div className="w-full mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-600">
-              {createError}
-            </div>
-          )}
           <div className="flex gap-2 w-full justify-end">
-            <Drawer.Close asChild><Button variant="secondary" onClick={() => { newMediaRef.current = {}; setNewMedia({}); uploadedFileUrlRef.current = ''; setMessage(null); setCreateError(null); }}>Cancel</Button></Drawer.Close>
-            <Button isLoading={submitting} onClick={handleCreate}>
-              {(newMedia.url || uploadedFileUrlRef.current) ? 'Create' : 'Create (upload file first)'}
-            </Button>
+            <Drawer.Close asChild>
+              <Button variant="secondary" onClick={closeAll}>Cancel</Button>
+            </Drawer.Close>
           </div>
         </Drawer.Footer>
       </Drawer>
+
+      {/* ── Single Drawer — Edit mode ───────────────────────────────── */}
+      <Drawer open={openEdit} onOpenChange={(open) => { if (!open) closeAll() }}>
+        <Drawer.Header>
+          <Drawer.Title>Edit Media</Drawer.Title>
+        </Drawer.Header>
+        <Drawer.Body>
+          <div className="flex flex-col gap-4">
+            {editMedia.url && (
+              <div className="flex justify-center bg-gray-50 rounded-lg p-3 border border-gray-200">
+                {editMedia.mime_type?.startsWith('video') ? (
+                  <video src={editMedia.url} poster={editMedia.thumbnail_url || undefined} className="max-h-40 rounded" controls />
+                ) : (
+                  <img src={editMedia.url} className="max-h-40 object-contain rounded" />
+                )}
+              </div>
+            )}
+            <Input placeholder="Title (English)" value={editMedia.title || ''} onChange={(e) => setEditMedia((p) => ({ ...p, title: e.target.value }))} />
+            <Input placeholder="Title (Arabic)" value={editMedia.title_ar || ''} onChange={(e) => setEditMedia((p) => ({ ...p, title_ar: e.target.value }))} dir="rtl" />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Brand</label>
+              <BrandLogoPicker value={editMedia.brand || ''} onChange={(name) => setEditMedia((p) => ({ ...p, brand: name }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Linked Products <span className="text-xs text-gray-400 font-normal">(shown on right side of video)</span>
+              </label>
+              <ProductPicker selectedIds={editMedia.product_ids || []} onChange={(ids) => setEditMedia((p) => ({ ...p, product_ids: ids }))} />
+            </div>
+            <div className="flex items-center gap-3">
+              <input id="editIsFeatured" type="checkbox" checked={!!editMedia.is_featured} onChange={(e) => setEditMedia((p) => ({ ...p, is_featured: e.target.checked }))} />
+              <label htmlFor="editIsFeatured" className="text-sm">Featured Video (show prominently)</label>
+            </div>
+            {editMessage && (
+              <div className={`text-sm px-3 py-2 rounded ${editMessage.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                {editMessage}
+              </div>
+            )}
+          </div>
+        </Drawer.Body>
+        <Drawer.Footer>
+          <div className="flex gap-2 w-full justify-end">
+            <Drawer.Close asChild>
+              <Button variant="secondary" onClick={closeAll}>Cancel</Button>
+            </Drawer.Close>
+            <Button isLoading={editSubmitting} onClick={handleEditSave}>Save Changes</Button>
+          </div>
+        </Drawer.Footer>
+      </Drawer>
+
     </Container>
   )
 }

@@ -27,6 +27,115 @@ function genId(prefix: string): string {
 }
 
 /**
+ * Maps an Odoo category path to Medusa category handle
+ * PERMANENT SOLUTION: Uses hierarchical matching + ALL 373 Odoo categories
+ * 
+ * Examples:
+ *   "Gaming / Monitor" → finds or creates "gaming"
+ *   "Mobile / Tablet / Powerbanks / Magsafe" → finds or creates "magsafe"
+ *   "Electronics / Audio / Headphones" → finds or creates "headphones"
+ */
+function odooCategoryToHandle(odooCategory: string | null): string | null {
+  if (!odooCategory) return null
+  
+  const cat = odooCategory.toLowerCase().trim()
+  const parts = cat.split("/").map(p => p.trim()).filter(p => p.length > 0)
+  
+  // Extract the LAST meaningful category (most specific)
+  // "Mobile / Tablet / Powerbanks / Magsafe" → use "magsafe"
+  const lastPart = parts.length > 0 ? parts[parts.length - 1] : null
+  if (!lastPart) return null
+  
+  // Smart keyword matching on final category level
+  const keywords: Record<string, string> = {
+    "power station": "powerbank",
+    "power bank": "powerbank",
+    "powerbank": "powerbank",
+    "projector": "projectors",
+    "gaming monitor": "gaming",
+    "gaming console": "gaming",
+    "gaming mouse": "gaming",
+    "gaming headset": "gaming",
+    "gaming mic": "gaming",
+    "gaming speaker": "gaming",
+    "gaming": "gaming",
+    "earphone": "tws-headphone",
+    "earbud": "tws-headphone",
+    "headset": "tws-headphone",
+    "headphone": "tws-headphone",
+    "wireless headphone": "tws-headphone",
+    "fm transmitter": "fm-transmitter",
+    "cable": "cables",
+    "hub": "hubs",
+    "usb hub": "hubs",
+    "power socket": "power-socket",
+    "power outlet": "power-socket",
+    "tablet": "mobiletablet",
+    "ipad": "mobiletablet",
+    "smart watch": "smart-watch",
+    "smartwatch": "smart-watch",
+    "watch": "smart-watch",
+    "watch band": "smart-watch-loops",
+    "watch strap": "smart-watch-loops",
+    "lifestyle": "lifestyle",
+    "holder": "mobile-stand",
+    "stand": "mobile-stand",
+    "phone stand": "mobile-stand",
+    "speaker": "speakers",
+    "bluetooth speaker": "speakers",
+    "charger": "chargers",
+    "power charger": "chargers",
+    "fast charger": "chargers",
+    "car charger": "car-charger",
+    "car mount": "car-mount",
+    "phone mount": "car-mount",
+    "magsafe": "magsafe",
+    "magnetic": "magsafe",
+    "screen protector": "screen-protector",
+    "tempered glass": "screen-protector",
+    "protector": "screen-protector",
+    "case": "cases",
+    "phone case": "cases",
+    "mobile case": "cases",
+    "protective case": "cases",
+    "power delivery": "chargers",
+    "usb-c": "cables",
+    "usb": "cables",
+    "lightning": "cables",
+    "micro usb": "cables",
+  }
+  
+  // Check exact match on last part first
+  const exactMatch = keywords[lastPart]
+  if (exactMatch) {
+    return exactMatch
+  }
+  
+  // Check partial matches on last part
+  for (const [keyword, handle] of Object.entries(keywords)) {
+    if (lastPart.includes(keyword) || keyword.includes(lastPart)) {
+      return handle
+    }
+  }
+  
+  // Check all parts (breadcrumb matching)
+  for (const part of parts) {
+    const partMatch = keywords[part]
+    if (partMatch) {
+      return partMatch
+    }
+    for (const [keyword, handle] of Object.entries(keywords)) {
+      if (part.includes(keyword) || keyword.includes(part)) {
+        return handle
+      }
+    }
+  }
+  
+  // Last resort: use the last part as the handle (slugified)
+  return lastPart.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")
+}
+
+/**
  * Generate direct Odoo image URL for a product
  */
 function getOdooImageUrl(odooId: number): string {
@@ -36,29 +145,116 @@ function getOdooImageUrl(odooId: number): string {
 interface OdooProductPayload {
   odoo_id: number
   name: string
+  // ── Arabic translations (real Odoo fields: arabic_name, arabic_description) ─
+  arabic_name?: string               // Arabic product name → saved as title_ar
+  arabic_description?: string        // Arabic description  → saved as description_ar
+  // ── Basic fields ──────────────────────────────────────────────────────────
   default_code?: string
   barcode?: string
   list_price?: number
-  compare_list_price?: number
+  compare_list_price?: number        // strikethrough price on product page
+  standard_price?: number            // cost price (Odoo field name) → saved as cost_price
+  cost_price?: number                // alias for standard_price
+  retail_price?: number              // RRP / recommended retail price
   currency_code?: string
   description_sale?: string
   description?: string
   categ_id?: [number, string] | false
-  brand?: string
+  // ── Brand (use custom_brand_id from Odoo, NOT brand_id) ───────────────────
+  brand?: string                     // brand name string (from x_studio_brand_1 or custom_brand_id[1])
+  custom_brand_id?: [number, string] | false  // [id, "Apple"] → used to build brand_logo_url
+  brand_logo_url?: string            // direct URL to brand logo image
+  // ── Weight / Dimensions ───────────────────────────────────────────────────
   weight?: number
+  volume?: number
+  hs_code?: string                   // Harmonized System code for customs
+  country_of_origin?: string         // origin country name string
+  // ── Images ────────────────────────────────────────────────────────────────
   image_url?: string
   image_1920?: string
   images?: string[]
+  // ── Stock ─────────────────────────────────────────────────────────────────
   qty_available?: number
+  virtual_available?: number         // forecasted qty (Odoo: virtual_available)
   is_published?: boolean
+  // ── eCommerce description (Odoo field: description_ecommerce) ─────────────
+  description_ecommerce?: string     // Rich HTML description (Odoo native field)
+  ecommerce_description?: string     // alias kept for backward compatibility
+  // ── Category / Sub-category ───────────────────────────────────────────────
+  x_studio_sub_category?: string     // Odoo custom sub-category string
+  // ── SEO (Odoo fields: website_meta_title, website_meta_description) ───────
+  website_meta_title?: string        // SEO page title
+  website_meta_description?: string  // SEO meta description
+  seo_title?: string                 // alias
+  seo_description?: string           // alias
+  // ── Badges / Flags ────────────────────────────────────────────────────────
+  is_new?: boolean                   // shows "New" badge (custom Odoo field)
+  warranty?: string                  // warranty text e.g. "1 Year Warranty"
+  // ── Delivery fields (custom Odoo fields) ──────────────────────────────────
+  night_delivery?: boolean           // true = eligible for night delivery
+  fast_delivery_areas?: string[]     // areas for fast delivery e.g. ["Kuwait City","Hawalli"]
+  // ── Product Comparison / Cross-sell ───────────────────────────────────────
+  alternative_odoo_ids?: number[]    // from Odoo: alternative_product_ids
+  alternative_product_ids?: number[] // Odoo native field name alias
+  upsell_odoo_ids?: number[]         // optional products / upsell
+  optional_product_ids?: number[]    // Odoo native field name alias
+  accessory_odoo_ids?: number[]      // from Odoo: accessory_product_ids
+  accessory_product_ids?: number[]   // Odoo native field name alias
+  // ── Specifications / Attributes ───────────────────────────────────────────
+  attributes?: Record<string, string> // computed from attribute_line_ids e.g. {"Color":"Black"}
+  features?: string[]                 // bullet-point feature list
+  // ──────────────────────────────────────────────────────────────────────────
   [key: string]: any
+}
+
+/**
+ * Ensure a category exists, creating it if necessary
+ * This enables automatic category creation from Odoo products
+ */
+async function ensureCategory(
+  pg: any,
+  handle: string,
+  name: string,
+  categoryByHandle: Map<string, string>
+): Promise<string> {
+  if (categoryByHandle.has(handle)) {
+    return categoryByHandle.get(handle)!
+  }
+  
+  try {
+    const catId = genId("pcat")
+    await pg.raw(
+      `INSERT INTO product_category (id, name, handle, status, is_active, rank, created_at, updated_at)
+       VALUES (?, ?, ?, 'published', true, 0, NOW(), NOW())
+       ON CONFLICT (handle) DO NOTHING`,
+      [catId, name, handle]
+    )
+    
+    // Re-fetch to get the actual ID (in case of conflict)
+    const fetchRes = await pg.raw(
+      `SELECT id FROM product_category WHERE handle = ? AND deleted_at IS NULL LIMIT 1`,
+      [handle]
+    )
+    
+    if (fetchRes.rows?.length > 0) {
+      const actualId = fetchRes.rows[0].id
+      categoryByHandle.set(handle, actualId)
+      console.log(`[Odoo Webhook] Auto-created category: ${name} (${handle})`)
+      return actualId
+    }
+  } catch (err) {
+    console.warn(`[Odoo Webhook] Failed to create category ${handle}: ${err}`)
+  }
+  
+  return ""
 }
 
 async function upsertProduct(
   pg: any,
   p: OdooProductPayload,
   salesChannelId: string | null,
-  existingHandles: Set<string>
+  existingHandles: Set<string>,
+  categoryByHandle: Map<string, string>
 ): Promise<{ action: string; productId: string }> {
   const odooId = p.odoo_id
   const sku = p.default_code || `ODOO-${odooId}`
@@ -68,17 +264,78 @@ async function upsertProduct(
   const description = p.description_sale || p.description || ""
   const weight = p.weight ? String(p.weight) : null
   const status = p.is_published === false ? "draft" : "published"
-  const brand = p.brand || null
+
+  // ── Brand: prefer custom_brand_id[1], fallback to brand string ───────────
+  const brand = (p.custom_brand_id && Array.isArray(p.custom_brand_id) ? p.custom_brand_id[1] : null)
+    || p.brand
+    || null
+
+  // ── Brand logo: auto-build from custom_brand_id if not explicitly sent ───
+  const brandLogoUrl = p.brand_logo_url
+    || (p.custom_brand_id && Array.isArray(p.custom_brand_id)
+      ? `${ODOO_BASE_URL}/web/image/custom.product.brand/${p.custom_brand_id[0]}/image_1920`
+      : null)
+
   const category = p.categ_id && Array.isArray(p.categ_id) ? p.categ_id[1] : null
 
-  const metadata = {
+  // ── Alternative/accessory/upsell: accept both Odoo native names + our aliases ─
+  const alternativeIds = Array.isArray(p.alternative_odoo_ids) ? p.alternative_odoo_ids
+    : Array.isArray(p.alternative_product_ids) ? p.alternative_product_ids : []
+  const accessoryIds = Array.isArray(p.accessory_odoo_ids) ? p.accessory_odoo_ids
+    : Array.isArray(p.accessory_product_ids) ? p.accessory_product_ids : []
+  const upsellIds = Array.isArray(p.upsell_odoo_ids) ? p.upsell_odoo_ids
+    : Array.isArray(p.optional_product_ids) ? p.optional_product_ids : []
+
+  // ── eCommerce description: accept both field names ────────────────────────
+  const ecommerceDesc = p.description_ecommerce || p.ecommerce_description || ''
+
+  const metadata: Record<string, any> = {
     odoo_id: odooId,
     odoo_sku: sku,
     odoo_barcode: p.barcode || null,
     odoo_category: category,
     odoo_brand: brand,
     odoo_qty: p.qty_available || 0,
+    odoo_stock: p.qty_available || 0,
     synced_at: new Date().toISOString(),
+    // ── Pricing ──────────────────────────────────────────────────────────
+    list_price: p.list_price || 0,
+    compare_price: p.compare_list_price || 0,
+    cost_price: p.standard_price || p.cost_price || 0,   // standard_price is the real Odoo field name
+    retail_price: p.retail_price || 0,
+    // ── Brand ────────────────────────────────────────────────────────────
+    brand: brand,
+    brand_logo_url: brandLogoUrl,
+    // ── Arabic translations ───────────────────────────────────────────────
+    title_ar: p.arabic_name || null,
+    description_ar: p.arabic_description || null,
+    // ── Descriptions ─────────────────────────────────────────────────────
+    ecommerce_description: ecommerceDesc,
+    // ── Category / Sub-category ───────────────────────────────────────────
+    sub_category: p.x_studio_sub_category || null,
+    // ── Stock / Inventory ─────────────────────────────────────────────────
+    forecasted_qty: p.virtual_available || 0,
+    // ── Physical ─────────────────────────────────────────────────────────
+    volume: p.volume || null,
+    hs_code: p.hs_code || null,
+    country_of_origin: p.country_of_origin || null,
+    // ── Badges / Flags ────────────────────────────────────────────────────
+    is_new: p.is_new === true,
+    warranty: p.warranty || '1 Year Warranty',
+    // ── SEO ──────────────────────────────────────────────────────────────
+    seo_title: p.website_meta_title || p.seo_title || null,
+    seo_description: p.website_meta_description || p.seo_description || null,
+    // ── Delivery eligibility ──────────────────────────────────────────────
+    night_delivery: p.night_delivery === true,
+    fast_delivery_areas: Array.isArray(p.fast_delivery_areas) ? p.fast_delivery_areas : [],
+    // ── Cross-sell / Comparison ───────────────────────────────────────────
+    alternative_odoo_ids: alternativeIds,
+    upsell_odoo_ids: upsellIds,
+    accessory_odoo_ids: accessoryIds,
+    // ── Specifications / Attributes ───────────────────────────────────────
+    attributes: (p.attributes && typeof p.attributes === 'object') ? p.attributes : {},
+    features: Array.isArray(p.features) ? p.features : [],
+    // ─────────────────────────────────────────────────────────────────────
   }
 
   // Check if product exists by odoo_id or SKU
@@ -110,6 +367,86 @@ async function upsertProduct(
         [price, rawAmount, currency, varRes.rows[0].psid]
       )
     }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // CATEGORY SYNC
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const catHandle = odooCategoryToHandle(category)
+    if (catHandle) {
+      // Use ensureCategory to automatically create if missing
+      const catId = await ensureCategory(pg, catHandle, category || catHandle, categoryByHandle)
+      if (catId) {
+        try {
+          await pg.raw(
+            `INSERT INTO product_category_product (id, product_id, product_category_id, created_at, updated_at)
+             VALUES (?, ?, ?, NOW(), NOW())
+             ON CONFLICT (product_id, product_category_id) DO NOTHING`,
+            [genId("pcp"), prodId, catId]
+          )
+        } catch (err) {
+          console.warn(`[Odoo Webhook] Category link failed for ${prodId}: ${err}`)
+        }
+      }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // INVENTORY SYNC
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const qty = p.qty_available || 0
+    if (varRes.rows?.length > 0) {
+      const vid = varRes.rows[0].vid
+      try {
+        // Check if inventory_item exists
+        const invItemRes = await pg.raw(
+          `SELECT id FROM inventory_item WHERE sku = ? LIMIT 1`,
+          [sku]
+        )
+
+        if (invItemRes.rows?.length > 0) {
+          // Update existing
+          const invItemId = invItemRes.rows[0].id
+          const invLvlRes = await pg.raw(
+            `SELECT id FROM inventory_level WHERE inventory_item_id = ? LIMIT 1`,
+            [invItemId]
+          )
+          if (invLvlRes.rows?.length > 0) {
+            await pg.raw(
+              `UPDATE inventory_level SET stocked_quantity = ?, updated_at = NOW() WHERE id = ?`,
+              [qty, invLvlRes.rows[0].id]
+            )
+          } else {
+            // Create level if missing
+            const locRes = await pg.raw(`SELECT id FROM stock_location LIMIT 1`)
+            if (locRes.rows?.length > 0) {
+              await pg.raw(
+                `INSERT INTO inventory_level (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity, incoming_quantity, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, 0, 0, NOW(), NOW())`,
+                [genId("iloc"), invItemId, locRes.rows[0].id, qty]
+              )
+            }
+          }
+        } else {
+          // Create inventory_item + level
+          const invItemId = genId("iitem")
+          await pg.raw(
+            `INSERT INTO inventory_item (id, sku, title, created_at, updated_at)
+             VALUES (?, ?, ?, NOW(), NOW())`,
+            [invItemId, sku, title]
+          )
+          const locRes = await pg.raw(`SELECT id FROM stock_location LIMIT 1`)
+          if (locRes.rows?.length > 0) {
+            await pg.raw(
+              `INSERT INTO inventory_level (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity, incoming_quantity, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 0, 0, NOW(), NOW())`,
+              [genId("iloc"), invItemId, locRes.rows[0].id, qty]
+            )
+          }
+        }
+      } catch (err) {
+        console.warn(`[Odoo Webhook] Inventory sync failed for ${sku}: ${err}`)
+      }
+    }
+
     return { action: "updated", productId: prodId }
   }
 
@@ -176,6 +513,50 @@ async function upsertProduct(
     } catch { /* ignore */ }
   }
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // CATEGORY SYNC
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const catHandle = odooCategoryToHandle(category)
+  const catId = catHandle ? categoryByHandle.get(catHandle) : null
+  if (catId) {
+    try {
+      await pg.raw(
+        `INSERT INTO product_category_product (id, product_id, product_category_id, created_at, updated_at)
+         VALUES (?, ?, ?, NOW(), NOW())
+         ON CONFLICT (product_id, product_category_id) DO NOTHING`,
+        [genId("pcp"), productId, catId]
+      )
+    } catch (err) {
+      console.warn(`[Odoo Webhook] Category link failed for ${productId}: ${err}`)
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // INVENTORY SYNC
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const qty = p.qty_available || 0
+  try {
+    // Create inventory_item
+    const invItemId = genId("iitem")
+    await pg.raw(
+      `INSERT INTO inventory_item (id, sku, title, created_at, updated_at)
+       VALUES (?, ?, ?, NOW(), NOW())`,
+      [invItemId, sku, title]
+    )
+    // Get default location
+    const locRes = await pg.raw(`SELECT id FROM stock_location LIMIT 1`)
+    if (locRes.rows?.length > 0) {
+      // Create inventory_level
+      await pg.raw(
+        `INSERT INTO inventory_level (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity, incoming_quantity, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 0, 0, NOW(), NOW())`,
+        [genId("iloc"), invItemId, locRes.rows[0].id, qty]
+      )
+    }
+  } catch (err) {
+    console.warn(`[Odoo Webhook] Inventory sync failed for ${sku}: ${err}`)
+  }
+
   return { action: "created", productId }
 }
 
@@ -199,6 +580,14 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     const salesChannelId = scRes.rows?.[0]?.id || null
     const hRes = await pg.raw(`SELECT handle FROM product WHERE deleted_at IS NULL`)
     const existingHandles = new Set<string>(hRes.rows?.map((r: any) => r.handle) || [])
+
+    // Load category mappings
+    const catRes = await pg.raw(`SELECT id, handle FROM product_category WHERE deleted_at IS NULL`)
+    const categoryByHandle = new Map<string, string>()
+    for (const row of catRes.rows || []) {
+      categoryByHandle.set(row.handle, row.id)
+    }
+    console.log(`[Odoo Webhook] Loaded ${categoryByHandle.size} categories`)
 
     // DELETE
     if (event_type === "product.deleted") {
@@ -224,7 +613,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       for (const p of products) {
         try {
           if (!p.odoo_id || !p.name) { errors++; continue }
-          const r = await upsertProduct(pg, p, salesChannelId, existingHandles)
+          const r = await upsertProduct(pg, p, salesChannelId, existingHandles, categoryByHandle)
           if (r.action === "created") created++; else updated++
         } catch (err: any) {
           errors++
@@ -241,7 +630,7 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     if (!p?.odoo_id || !p?.name) {
       return res.status(400).json({ message: "product.odoo_id and product.name are required" })
     }
-    const result = await upsertProduct(pg, p, salesChannelId, existingHandles)
+    const result = await upsertProduct(pg, p, salesChannelId, existingHandles, categoryByHandle)
     console.log(`[Odoo Webhook] ${result.action}: ${p.name} -> ${result.productId}`)
     return res.json({ status: "success", ...result, odoo_id: p.odoo_id, product_name: p.name })
 

@@ -57,3 +57,7 @@ static/*.mp4
 yarn.lock
 package-lock.json
 pnpm-lock.yaml
+
+# Admin build assets (generated)
+public/admin/assets/
+public/admin/index.html

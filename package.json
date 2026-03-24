@@ -31,6 +31,7 @@
     "create:pubkey": "medusa exec ./src/scripts/create-publishable-key.ts",
     "seed:hero-banner": "medusa exec ./src/scripts/create-sample-hero-banner.ts",
     "create:categories": "medusa exec ./src/scripts/create-categories.ts",
+    "setup:complete-categories": "medusa exec ./src/scripts/setup-complete-categories.ts",
     "create:sample-video": "medusa exec ./src/scripts/create-sample-video.ts",
     "sync:odoo": "medusa exec ./src/scripts/odoo-sync.ts",
     "sync:inventory": "medusa exec ./src/scripts/odoo-inventory-sync.ts",
