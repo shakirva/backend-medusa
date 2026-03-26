@@ -469,11 +469,27 @@ async function upsertProduct(
     [productId, title, handle, brand || "", description, thumbnail, status, weight, JSON.stringify(metadata)]
   )
 
-  const variantId = genId("variant")
-  await pg.raw(
-    `INSERT INTO product_variant (id, product_id, title, sku, barcode, manage_inventory, allow_backorder, variant_rank, created_at, updated_at) VALUES (?, ?, 'Default', ?, ?, true, false, 0, NOW(), NOW())`,
-    [variantId, productId, sku, p.barcode || null]
+  // Check if a variant with this SKU already exists (e.g. from a previous failed insert)
+  // and reuse it rather than crashing on duplicate SKU constraint
+  const existingVariant = await pg.raw(
+    `SELECT id FROM product_variant WHERE sku = ? AND deleted_at IS NULL LIMIT 1`,
+    [sku]
   )
+  let variantId: string
+  if (existingVariant.rows?.length > 0) {
+    variantId = existingVariant.rows[0].id
+    await pg.raw(
+      `UPDATE product_variant SET product_id=?, barcode=COALESCE(?, barcode), updated_at=NOW() WHERE id=?`,
+      [productId, p.barcode || null, variantId]
+    )
+  } else {
+    variantId = genId("variant")
+    await pg.raw(
+      `INSERT INTO product_variant (id, product_id, title, sku, barcode, manage_inventory, allow_backorder, variant_rank, created_at, updated_at)
+       VALUES (?, ?, 'Default', ?, ?, true, false, 0, NOW(), NOW())`,
+      [variantId, productId, sku, p.barcode || null]
+    )
+  }
 
   if (price > 0) {
     const priceSetId = genId("pset")
