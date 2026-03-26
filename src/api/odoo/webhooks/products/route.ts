@@ -580,13 +580,37 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   const pg = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
   const startTime = Date.now()
   const body = req.body as any
-  const { event_type, webhook_secret } = body
+
+  // Log raw payload for debugging (first 500 chars)
+  console.log(`[Odoo Webhook] RAW body keys: ${Object.keys(body || {}).join(', ')}`)
+
+  const { webhook_secret } = body
 
   if (WEBHOOK_SECRET && webhook_secret !== WEBHOOK_SECRET) {
     return res.status(401).json({ type: "unauthorized", message: "Invalid webhook_secret" })
   }
+
+  // Auto-detect event_type if not provided by Odoo
+  // Odoo may send the product fields directly at root level (no event_type wrapper)
+  let event_type = body.event_type
+
   if (!event_type) {
-    return res.status(400).json({ type: "invalid_data", message: "event_type is required" })
+    if (body.products && Array.isArray(body.products)) {
+      event_type = "product.bulk"
+    } else if (body.id && body.name) {
+      // Odoo sends fields at root level — wrap into expected shape
+      event_type = "product.created"
+      if (!body.product) {
+        body.product = { ...body }
+        body.product.odoo_id = body.product.odoo_id || body.product.id
+      }
+    } else if (body.product?.id || body.product?.odoo_id) {
+      event_type = "product.created"
+      if (!body.product.odoo_id) body.product.odoo_id = body.product.id
+    } else {
+      console.warn(`[Odoo Webhook] 400 - missing event_type. Body: ${JSON.stringify(body).substring(0,300)}`)
+      return res.status(400).json({ type: "invalid_data", message: "event_type is required" })
+    }
   }
 
   console.log(`[Odoo Webhook] ${event_type} received`)
@@ -642,7 +666,8 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
     }
 
     // SINGLE CREATE/UPDATE
-    const p: OdooProductPayload = body.product
+    // Support both: { product: {...} } and flat root-level { id, name, ... }
+    const p: OdooProductPayload = body.product || body
     if (!p?.odoo_id || !p?.name) {
       return res.status(400).json({ message: "product.odoo_id and product.name are required" })
     }
