@@ -192,10 +192,15 @@ interface OdooProductPayload {
   description_sale?: string
   description?: string
   categ_id?: [number, string] | false
+  // ── eCommerce / public categories (Odoo: public_categ_ids) ───────────────
+  // This is the STOREFRONT category path e.g. "Electronics / Earphones & Headphones/Kids Headphone"
+  // It is MORE accurate than categ_id for website display — use it as primary category source
+  public_categ_ids?: string | string[] | [number, string][]  // various formats Odoo may send
   // ── Brand (use custom_brand_id from Odoo, NOT brand_id) ───────────────────
   brand?: string                     // brand name string (from x_studio_brand_1 or custom_brand_id[1])
   custom_brand_id?: [number, string] | false  // [id, "Apple"] → used to build brand_logo_url
   brand_logo_url?: string            // direct URL to brand logo image
+  brand_image_url?: string           // alias that Odoo dev may send instead of brand_logo_url
   // ── Weight / Dimensions ───────────────────────────────────────────────────
   weight?: number
   volume?: number
@@ -233,7 +238,8 @@ interface OdooProductPayload {
   accessory_odoo_ids?: number[]      // from Odoo: accessory_product_ids
   accessory_product_ids?: number[]   // Odoo native field name alias
   // ── Specifications / Attributes ───────────────────────────────────────────
-  attributes?: Record<string, string> // computed from attribute_line_ids e.g. {"Color":"Black"}
+  attributes?: Record<string, string> // computed from attribute_line_ids e.g. {"Color":"Black","Size":"M"}
+  attribute_line_ids?: Record<string, string> | Array<{name: string; values: string[]}> // raw Odoo format
   features?: string[]                 // bullet-point feature list
   // ──────────────────────────────────────────────────────────────────────────
   [key: string]: any
@@ -297,18 +303,63 @@ async function upsertProduct(
   const weight = p.weight ? String(p.weight) : null
   const status = p.is_published === false ? "draft" : "published"
 
+  // ── Barcode: strip "(EAN-13): " or "(EAN-8): " or any similar prefix ──────
+  const rawBarcode = p.barcode || null
+  const barcode = rawBarcode
+    ? rawBarcode.replace(/^\(.*?\):\s*/i, "").trim() || rawBarcode
+    : null
+
   // ── Brand: prefer custom_brand_id[1], fallback to brand string ───────────
   const brand = (p.custom_brand_id && Array.isArray(p.custom_brand_id) ? p.custom_brand_id[1] : null)
     || p.brand
     || null
 
-  // ── Brand logo: auto-build from custom_brand_id if not explicitly sent ───
-  const brandLogoUrl = p.brand_logo_url
+  // ── Brand logo: accept brand_image_url (Odoo dev field) OR brand_logo_url,
+  //    OR auto-build from custom_brand_id ────────────────────────────────────
+  const brandLogoUrl = p.brand_image_url
+    || p.brand_logo_url
     || (p.custom_brand_id && Array.isArray(p.custom_brand_id)
       ? `${ODOO_BASE_URL}/web/image/custom.product.brand/${p.custom_brand_id[0]}/image_1920`
       : null)
 
-  const category = p.categ_id && Array.isArray(p.categ_id) ? p.categ_id[1] : null
+  // ── Category: prefer public_categ_ids (eCommerce path) over categ_id ─────
+  // public_categ_ids is the STOREFRONT category ("Electronics / Earphones & Headphones/Kids Headphone")
+  // categ_id is the internal accounting category ("Kids Headphones") — less accurate for website
+  let categoryForMapping: string | null = null
+  if (p.public_categ_ids) {
+    if (typeof p.public_categ_ids === 'string') {
+      categoryForMapping = p.public_categ_ids
+    } else if (Array.isArray(p.public_categ_ids) && p.public_categ_ids.length > 0) {
+      const first = p.public_categ_ids[0]
+      if (typeof first === 'string') {
+        categoryForMapping = first
+      } else if (Array.isArray(first) && first.length >= 2) {
+        categoryForMapping = String(first[1])
+      }
+    }
+  }
+  // Fallback to categ_id if public_categ_ids not provided
+  const category = categoryForMapping
+    || (p.categ_id && Array.isArray(p.categ_id) ? p.categ_id[1] : null)
+
+  // ── Attributes: accept both pre-computed { Color: "Yellow" } dict
+  //    AND raw attribute_line_ids array from Odoo ────────────────────────────
+  let attributes: Record<string, string> = {}
+  if (p.attributes && typeof p.attributes === 'object' && !Array.isArray(p.attributes)) {
+    attributes = p.attributes
+  } else if (p.attribute_line_ids) {
+    if (Array.isArray(p.attribute_line_ids)) {
+      // Array format: [{name: "Colour", values: ["Yellow"]}, ...]
+      for (const line of p.attribute_line_ids as Array<{name: string; values: string[]}>) {
+        if (line.name && Array.isArray(line.values) && line.values.length > 0) {
+          attributes[line.name] = line.values.join(", ")
+        }
+      }
+    } else if (typeof p.attribute_line_ids === 'object') {
+      // Dict format: { "colour": "yellow" }
+      attributes = p.attribute_line_ids as Record<string, string>
+    }
+  }
 
   // ── Alternative/accessory/upsell: accept both Odoo native names + our aliases ─
   const alternativeIds = Array.isArray(p.alternative_odoo_ids) ? p.alternative_odoo_ids
@@ -324,7 +375,7 @@ async function upsertProduct(
   const metadata: Record<string, any> = {
     odoo_id: odooId,
     odoo_sku: sku,
-    odoo_barcode: p.barcode || null,
+    odoo_barcode: barcode,
     odoo_category: category,
     odoo_brand: brand,
     odoo_qty: p.qty_available || 0,
@@ -333,7 +384,7 @@ async function upsertProduct(
     // ── Pricing ──────────────────────────────────────────────────────────
     list_price: p.list_price || 0,
     compare_price: p.compare_list_price || 0,
-    cost_price: p.standard_price || p.cost_price || 0,   // standard_price is the real Odoo field name
+    cost_price: p.standard_price || p.cost_price || 0,
     retail_price: p.retail_price || 0,
     // ── Brand ────────────────────────────────────────────────────────────
     brand: brand,
@@ -345,6 +396,7 @@ async function upsertProduct(
     ecommerce_description: ecommerceDesc,
     // ── Category / Sub-category ───────────────────────────────────────────
     sub_category: p.x_studio_sub_category || null,
+    public_categ_ids: p.public_categ_ids || null,    // full eCommerce path from Odoo
     // ── Stock / Inventory ─────────────────────────────────────────────────
     forecasted_qty: p.virtual_available || 0,
     // ── Physical ─────────────────────────────────────────────────────────
@@ -365,7 +417,7 @@ async function upsertProduct(
     upsell_odoo_ids: upsellIds,
     accessory_odoo_ids: accessoryIds,
     // ── Specifications / Attributes ───────────────────────────────────────
-    attributes: (p.attributes && typeof p.attributes === 'object') ? p.attributes : {},
+    attributes: attributes,
     features: Array.isArray(p.features) ? p.features : [],
     // ─────────────────────────────────────────────────────────────────────
   }
@@ -392,6 +444,13 @@ async function upsertProduct(
       `SELECT pv.id as vid, pvps.price_set_id as psid FROM product_variant pv LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id WHERE pv.product_id = ? AND pv.deleted_at IS NULL LIMIT 1`,
       [prodId]
     )
+    // Always update barcode with cleaned value on update
+    if (varRes.rows?.length > 0 && barcode) {
+      await pg.raw(
+        `UPDATE product_variant SET barcode=?, updated_at=NOW() WHERE id=?`,
+        [barcode, varRes.rows[0].vid]
+      )
+    }
     if (varRes.rows?.length > 0 && varRes.rows[0].psid && price > 0) {
       const rawAmount = JSON.stringify({ value: String(price), precision: 20 })
       await pg.raw(
@@ -512,17 +571,18 @@ async function upsertProduct(
     variantId = existingVariant.rows[0].id
     await pg.raw(
       `UPDATE product_variant SET product_id=?, barcode=COALESCE(?, barcode), updated_at=NOW() WHERE id=?`,
-      [productId, p.barcode || null, variantId]
+      [productId, barcode, variantId]
     )
   } else {
     variantId = genId("variant")
     await pg.raw(
       `INSERT INTO product_variant (id, product_id, title, sku, barcode, manage_inventory, allow_backorder, variant_rank, created_at, updated_at)
        VALUES (?, ?, 'Default', ?, ?, true, false, 0, NOW(), NOW())`,
-      [variantId, productId, sku, p.barcode || null]
+      [variantId, productId, sku, barcode]
     )
   }
 
+  // ── Price ─────────────────────────────────────────────────────────────────
   if (price > 0) {
     const priceSetId = genId("pset")
     await pg.raw(`INSERT INTO price_set (id, created_at, updated_at) VALUES (?, NOW(), NOW())`, [priceSetId])
@@ -535,6 +595,57 @@ async function upsertProduct(
       `INSERT INTO price (id, price_set_id, currency_code, amount, raw_amount, rules_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, NOW(), NOW())`,
       [genId("price"), priceSetId, currency, price, rawAmount]
     )
+  }
+
+  // ── Product Options (attributes from attribute_line_ids / attributes) ─────
+  // Writes to product_option + product_option_value tables so admin shows them
+  if (Object.keys(attributes).length > 0) {
+    try {
+      let optionRank = 0
+      for (const [attrName, attrValue] of Object.entries(attributes)) {
+        const optionId = genId("opt")
+        await pg.raw(
+          `INSERT INTO product_option (id, product_id, title, rank, created_at, updated_at)
+           VALUES (?, ?, ?, ?, NOW(), NOW())
+           ON CONFLICT DO NOTHING`,
+          [optionId, productId, attrName, optionRank++]
+        )
+        // Re-fetch the option id (in case of conflict)
+        const optRes = await pg.raw(
+          `SELECT id FROM product_option WHERE product_id = ? AND title = ? LIMIT 1`,
+          [productId, attrName]
+        )
+        const realOptId = optRes.rows?.[0]?.id || optionId
+        // Insert each value (comma-separated support)
+        const values = attrValue.split(",").map((v: string) => v.trim()).filter(Boolean)
+        let valueRank = 0
+        for (const val of values) {
+          const ovId = genId("optval")
+          await pg.raw(
+            `INSERT INTO product_option_value (id, option_id, value, rank, created_at, updated_at)
+             VALUES (?, ?, ?, ?, NOW(), NOW())
+             ON CONFLICT DO NOTHING`,
+            [ovId, realOptId, val, valueRank++]
+          )
+        }
+        // Link variant to option value
+        const ovRes = await pg.raw(
+          `SELECT id FROM product_option_value WHERE option_id = ? ORDER BY rank LIMIT 1`,
+          [realOptId]
+        )
+        if (ovRes.rows?.[0]?.id) {
+          await pg.raw(
+            `INSERT INTO product_variant_option_value (id, variant_id, option_value_id, created_at, updated_at)
+             VALUES (?, ?, ?, NOW(), NOW())
+             ON CONFLICT DO NOTHING`,
+            [genId("pvov"), variantId, ovRes.rows[0].id]
+          )
+        }
+      }
+      console.log(`[Odoo Webhook] Wrote ${Object.keys(attributes).length} option(s) for ${sku}`)
+    } catch (err) {
+      console.warn(`[Odoo Webhook] Option write failed for ${sku}: ${err}`)
+    }
   }
 
   if (thumbnail) {
