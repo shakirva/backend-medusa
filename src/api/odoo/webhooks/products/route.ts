@@ -47,11 +47,30 @@ function odooCategoryToHandle(odooCategory: string | null): string | null {
   if (!lastPart) return null
   
   // Smart keyword matching on final category level
+  // ORDER MATTERS: more specific entries FIRST (before generic ones)
   const keywords: Record<string, string> = {
+    // ── Power ───────────────────────────────────────────────────────────
     "power station": "powerbank",
     "power bank": "powerbank",
     "powerbank": "powerbank",
-    "projector": "projectors",
+    // ── Kids & Toys ──────────────────────────────────────────────────────
+    "kids headphones": "kids-headphones",
+    "kids headphone": "kids-headphones",
+    "kids earphones": "kids-headphones",
+    "kids earphone": "kids-headphones",
+    "kids smart watch": "kids-smart-watches",
+    "kids smartwatch": "kids-smart-watches",
+    "kids watch": "kids-smart-watches",
+    "kids toys": "kids-toys",
+    "kids toy": "kids-toys",
+    "kids & toys": "kids-toys",
+    "kids and toys": "kids-toys",
+    "kids": "kids-toys",
+    "toy": "toys",
+    "toys": "toys",
+    "games": "toys",
+    "toys, games": "toys",
+    // ── Gaming ───────────────────────────────────────────────────────────
     "gaming monitor": "gaming",
     "gaming console": "gaming",
     "gaming mouse": "gaming",
@@ -59,50 +78,63 @@ function odooCategoryToHandle(odooCategory: string | null): string | null {
     "gaming mic": "gaming",
     "gaming speaker": "gaming",
     "gaming": "gaming",
+    "projector": "projectors",
+    // ── Audio / Headphones ───────────────────────────────────────────────
+    "wireless headphone": "tws-headphone",
+    "wireless earphone": "tws-headphone",
     "earphone": "tws-headphone",
     "earbud": "tws-headphone",
     "headset": "tws-headphone",
     "headphone": "tws-headphone",
-    "wireless headphone": "tws-headphone",
     "fm transmitter": "fm-transmitter",
-    "cable": "cables",
-    "hub": "hubs",
+    "speaker": "speakers",
+    "bluetooth speaker": "speakers",
+    // ── Cables & Hubs ────────────────────────────────────────────────────
     "usb hub": "hubs",
+    "hub": "hubs",
+    "usb-c": "cables",
+    "micro usb": "cables",
+    "lightning": "cables",
+    "cable": "cables",
+    "usb": "cables",
+    // ── Power sockets ────────────────────────────────────────────────────
     "power socket": "power-socket",
     "power outlet": "power-socket",
-    "tablet": "mobiletablet",
+    // ── Tablets ──────────────────────────────────────────────────────────
     "ipad": "mobiletablet",
+    "tablet": "mobiletablet",
+    // ── Watches ──────────────────────────────────────────────────────────
+    "watch band": "smart-watch-loops",
+    "watch strap": "smart-watch-loops",
     "smart watch": "smart-watch",
     "smartwatch": "smart-watch",
     "watch": "smart-watch",
-    "watch band": "smart-watch-loops",
-    "watch strap": "smart-watch-loops",
-    "lifestyle": "lifestyle",
+    // ── Stands / Holders ─────────────────────────────────────────────────
+    "phone stand": "mobile-stand",
+    "phone mount": "car-mount",
+    "car mount": "car-mount",
+    "car charger": "car-charger",
     "holder": "mobile-stand",
     "stand": "mobile-stand",
-    "phone stand": "mobile-stand",
-    "speaker": "speakers",
-    "bluetooth speaker": "speakers",
-    "charger": "chargers",
+    // ── Chargers ─────────────────────────────────────────────────────────
     "power charger": "chargers",
     "fast charger": "chargers",
-    "car charger": "car-charger",
-    "car mount": "car-mount",
-    "phone mount": "car-mount",
+    "power delivery": "chargers",
+    "charger": "chargers",
+    // ── MagSafe ──────────────────────────────────────────────────────────
     "magsafe": "magsafe",
     "magnetic": "magsafe",
+    // ── Screen Protectors ────────────────────────────────────────────────
     "screen protector": "screen-protector",
     "tempered glass": "screen-protector",
     "protector": "screen-protector",
-    "case": "cases",
-    "phone case": "cases",
-    "mobile case": "cases",
+    // ── Cases ────────────────────────────────────────────────────────────
     "protective case": "cases",
-    "power delivery": "chargers",
-    "usb-c": "cables",
-    "usb": "cables",
-    "lightning": "cables",
-    "micro usb": "cables",
+    "mobile case": "cases",
+    "phone case": "cases",
+    "case": "cases",
+    // ── Lifestyle ────────────────────────────────────────────────────────
+    "lifestyle": "lifestyle",
   }
   
   // Check exact match on last part first
@@ -378,10 +410,10 @@ async function upsertProduct(
       if (catId) {
         try {
           await pg.raw(
-            `INSERT INTO product_category_product (id, product_id, product_category_id, created_at, updated_at)
-             VALUES (?, ?, ?, NOW(), NOW())
+            `INSERT INTO product_category_product (product_id, product_category_id)
+             VALUES (?, ?)
              ON CONFLICT (product_id, product_category_id) DO NOTHING`,
-            [genId("pcp"), prodId, catId]
+            [prodId, catId]
           )
         } catch (err) {
           console.warn(`[Odoo Webhook] Category link failed for ${prodId}: ${err}`)
@@ -533,14 +565,18 @@ async function upsertProduct(
   // CATEGORY SYNC
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   const catHandle = odooCategoryToHandle(category)
-  const catId = catHandle ? categoryByHandle.get(catHandle) : null
-  if (catId) {
+  // Use ensureCategory on CREATE path too (same as UPDATE path)
+  // This means: if handle maps to an existing category → link it; if not → create it
+  const catIdForCreate = catHandle
+    ? await ensureCategory(pg, catHandle, category || catHandle, categoryByHandle)
+    : null
+  if (catIdForCreate) {
     try {
       await pg.raw(
-        `INSERT INTO product_category_product (id, product_id, product_category_id, created_at, updated_at)
-         VALUES (?, ?, ?, NOW(), NOW())
+        `INSERT INTO product_category_product (product_id, product_category_id)
+         VALUES (?, ?)
          ON CONFLICT (product_id, product_category_id) DO NOTHING`,
-        [genId("pcp"), productId, catId]
+        [productId, catIdForCreate]
       )
     } catch (err) {
       console.warn(`[Odoo Webhook] Category link failed for ${productId}: ${err}`)
