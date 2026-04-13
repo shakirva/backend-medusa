@@ -31,6 +31,50 @@ function slugify(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").replace(/(^-|-$)/g, "").substring(0, 100)
 }
 
+/**
+ * Maps an Odoo category path (e.g. "All / Saleable / Power Bank / Magsafe")
+ * to the corresponding Medusa category handle.
+ * Order matters: more specific paths checked first.
+ */
+function odooCategoryToHandle(odooCategory: string | null): string | null {
+  if (!odooCategory) return null
+  const cat = odooCategory.toLowerCase()
+
+  if (cat.includes("power station"))        return "powerbank"
+  if (cat.includes("power bank"))           return "powerbank"
+  if (cat.includes("powerbank"))            return "powerbank"
+  if (cat.includes("projector"))            return "projectors"
+  if (cat.includes("gaming / monitor"))     return "gaming"
+  if (cat.includes("gaming / console"))     return "gaming"
+  if (cat.includes("gaming / mouse"))       return "gaming"
+  if (cat.includes("gaming / headset"))     return "gaming"
+  if (cat.includes("gaming / mic"))         return "gaming"
+  if (cat.includes("gaming / speaker"))     return "gaming"
+  if (cat.includes("gaming"))              return "gaming"
+  if (cat.includes("earphone"))             return "tws-headphone"
+  if (cat.includes("headset"))              return "tws-headphone"
+  if (cat.includes("headphone"))            return "tws-headphone"
+  if (cat.includes("fm transmit"))          return "fm-transmitter"
+  if (cat.includes("cable"))                return "cables"
+  if (cat.includes("hub"))                  return "hubs"
+  if (cat.includes("power socket"))         return "power-socket"
+  if (cat.includes("tablet"))               return "mobiletablet"
+  if (cat.includes("smart watch"))          return "smart-watch"
+  if (cat.includes("watch band"))           return "smart-watch-loops"
+  if (cat.includes("lifestyle"))            return "lifestyle"
+  if (cat.includes("holder"))               return "mobile-stand"
+  if (cat.includes("stand"))                return "mobile-stand"
+  if (cat.includes("speaker"))              return "speakers"
+  if (cat.includes("charger"))              return "chargers"
+  if (cat.includes("car charger"))          return "car-charger"
+  if (cat.includes("car mount"))            return "car-mount"
+  if (cat.includes("magsafe"))              return "magsafe"
+  if (cat.includes("screen protector"))     return "screen-protector"
+  if (cat.includes("case"))                 return "cases"
+
+  return null
+}
+
 export default async function odooSync({ container }: ExecArgs) {
   console.log("\n\ud83d\udd04 Odoo -> MedusaJS Full Sync v3")
   console.log("=".repeat(55))
@@ -136,6 +180,11 @@ export default async function odooSync({ container }: ExecArgs) {
   console.log(`Existing in MedusaJS: ${existRes.rows?.length || 0} products`)
   console.log(`Sales Channel: ${salesChannelId}`)
 
+  // Load all Medusa categories into a handle->id map for fast lookup
+  const catRes = await pg.raw(`SELECT id, handle FROM product_category WHERE deleted_at IS NULL`)
+  const categoryByHandle = new Map<string, string>()
+  for (const row of catRes.rows || []) categoryByHandle.set(row.handle, row.id)
+
   // 5. Sync
   console.log(`\n4. Syncing ${allProducts.length} products...`)
   let created = 0, updated = 0, errors = 0
@@ -174,6 +223,15 @@ export default async function odooSync({ container }: ExecArgs) {
           const rawAmt = JSON.stringify({ value: String(p.list_price), precision: 20 })
           await pg.raw(`UPDATE price SET amount=?, raw_amount=?, updated_at=NOW() WHERE price_set_id=? AND deleted_at IS NULL`, [p.list_price, rawAmt, vr.rows[0].price_set_id])
         }
+        // Assign category from Odoo category path
+        const catHandle = odooCategoryToHandle(category)
+        const catId = catHandle ? categoryByHandle.get(catHandle) : null
+        if (catId) {
+          await pg.raw(
+            `INSERT INTO product_category_product (product_id, product_category_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
+            [existingProdId, catId]
+          )
+        }
         updated++
       } else {
         let handle = slugify(p.name) || `odoo-${p.id}`
@@ -207,6 +265,16 @@ export default async function odooSync({ container }: ExecArgs) {
 
         if (salesChannelId) {
           try { await pg.raw(`INSERT INTO product_sales_channel (id,product_id,sales_channel_id,created_at,updated_at) VALUES (?,?,?,NOW(),NOW()) ON CONFLICT (product_id,sales_channel_id) DO NOTHING`, [genId("psc"), productId, salesChannelId]) } catch {}
+        }
+
+        // Assign category from Odoo category path
+        const catHandle = odooCategoryToHandle(category)
+        const catId = catHandle ? categoryByHandle.get(catHandle) : null
+        if (catId) {
+          await pg.raw(
+            `INSERT INTO product_category_product (product_id, product_category_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
+            [productId, catId]
+          )
         }
 
         existingByOdooId.set(odooIdStr, { id: productId, handle })

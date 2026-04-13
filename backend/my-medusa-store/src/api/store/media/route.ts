@@ -1,7 +1,9 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { MEDIA_MODULE } from "../../../modules/media"
 import { BRAND_MODULE } from "../../../modules/brands"
 import BrandService from "../../../modules/brands/service"
+import { Knex } from "knex"
 
 export const AUTHENTICATE = false
 
@@ -27,9 +29,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     // Build a brand logo map keyed by brand name for O(1) lookup per media item
     const brandService = req.scope.resolve<BrandService>(BRAND_MODULE)
     const [allBrands] = await brandService.listAndCountBrands({}, { take: 200 })
-    const brandLogoMap = new Map<string, string | null>()
+    const brandLogoMap = new Map<string, { logo_url: string | null; slug: string | null }>()
     for (const b of allBrands) {
-      brandLogoMap.set(b.name, b.logo_url ?? null)
+      brandLogoMap.set(b.name, { logo_url: b.logo_url ?? null, slug: b.slug ?? null })
     }
 
     const getOrigin = () => {
@@ -46,21 +48,73 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       return `${origin}${path}`
     }
 
-    const media = items.map((m: any) => ({
-      id: m.id,
-      url: makeAbsolute(m.url || null),
-      mime_type: m.mime_type || null,
-      title: m.title || null,
-      title_ar: m.title_ar || null,
-      alt_text: m.alt_text || null,
-      thumbnail_url: makeAbsolute(m.thumbnail_url || null),
-      brand: m.brand || null,
-      brand_logo_url: m.brand ? (brandLogoMap.get(m.brand) ?? null) : null,
-      views: m.views ?? 0,
-      display_order: m.display_order ?? 0,
-      is_featured: !!m.is_featured,
-      metadata: m.metadata || null,
-    }))
+    // Collect all product IDs across all media items to batch-fetch them
+    const allProductIds: string[] = []
+    for (const m of items) {
+      const pids = Array.isArray(m.product_ids) ? m.product_ids : []
+      for (const pid of pids) {
+        if (pid && !allProductIds.includes(pid)) allProductIds.push(pid)
+      }
+    }
+
+    // Batch-fetch products from the DB using raw SQL for performance
+    // Uses Medusa v2 pricing tables: price + product_variant_price_set
+    const productMap = new Map<string, any>()
+    if (allProductIds.length > 0) {
+      try {
+        const pgConnection: Knex = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+        // Knex raw() uses ? placeholders (not $1,$2), and bindings must be wrapped in an object {bindings:[]}
+        const placeholders = allProductIds.map(() => '?').join(', ')
+        const result = await pgConnection.raw(
+          `SELECT DISTINCT ON (p.id)
+                  p.id, p.title, p.handle, p.thumbnail,
+                  pr.amount as calculated_price
+           FROM product p
+           LEFT JOIN product_variant pvar ON pvar.product_id = p.id AND pvar.deleted_at IS NULL
+           LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pvar.id
+           LEFT JOIN price pr ON pr.price_set_id = pvps.price_set_id
+           WHERE p.id IN (${placeholders}) AND p.deleted_at IS NULL
+           ORDER BY p.id, pr.amount ASC`,
+          allProductIds
+        )
+        for (const row of result.rows) {
+          productMap.set(row.id, {
+            id: row.id,
+            title: row.title,
+            handle: row.handle || null,
+            thumbnail: row.thumbnail || null,
+            price: row.calculated_price ? (row.calculated_price / 100).toFixed(2) : null,
+          })
+        }
+      } catch (err) {
+        console.error('Failed to fetch products for media:', err)
+      }
+    }
+
+    const media = items.map((m: any) => {
+      const brandInfo = m.brand ? brandLogoMap.get(m.brand) : null
+      const pids = Array.isArray(m.product_ids) ? m.product_ids : []
+      const related_products = pids.map((pid: string) => productMap.get(pid)).filter(Boolean)
+
+      return {
+        id: m.id,
+        url: makeAbsolute(m.url || null),
+        mime_type: m.mime_type || null,
+        title: m.title || null,
+        title_ar: m.title_ar || null,
+        alt_text: m.alt_text || null,
+        thumbnail_url: makeAbsolute(m.thumbnail_url || null),
+        brand: m.brand || null,
+        brand_logo_url: brandInfo ? brandInfo.logo_url : null,
+        brand_slug: brandInfo ? brandInfo.slug : null,
+        views: m.views ?? 0,
+        display_order: m.display_order ?? 0,
+        is_featured: !!m.is_featured,
+        product_ids: pids,
+        related_products,
+        metadata: m.metadata || null,
+      }
+    })
 
     res.json({ media, count })
   } catch (e: any) {

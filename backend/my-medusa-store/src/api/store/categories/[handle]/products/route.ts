@@ -14,7 +14,7 @@ import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
  * - min_price, max_price
  * - brand
  * - in_stock: true/false
- * - currency (default: aed)
+ * - currency (default: kwd)
  */
 export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const pgConnection = req.scope.resolve(ContainerRegistrationKeys.PG_CONNECTION)
@@ -25,9 +25,11 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
   const sort = (req.query.sort as string) || "newest"
   const minPrice = req.query.min_price ? parseFloat(req.query.min_price as string) : null
   const maxPrice = req.query.max_price ? parseFloat(req.query.max_price as string) : null
-  const brand = req.query.brand as string
+  const brand = req.query.brand as string       // filter by odoo_brand in metadata
+  const color = req.query.color as string       // filter by color option value
   const inStock = req.query.in_stock as string
-  const currency = (req.query.currency as string) || "aed"
+  // Always use KWD — this is a Kuwait-only store
+  const currency = (req.query.currency as string) || "kwd"
 
   try {
     // Find category by handle and get all child category IDs
@@ -77,22 +79,39 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       params.push(maxPrice)
     }
     if (brand) {
-      conditions.push("LOWER(p.title) LIKE ?")
-      params.push(`${brand.toLowerCase()}%`)
+      // Match against odoo_brand or brand_name in metadata, fallback to title starts-with
+      conditions.push(`(
+        LOWER(COALESCE(NULLIF(TRIM(p.metadata->>'odoo_brand'), ''), NULLIF(TRIM(p.metadata->>'brand_name'), ''))) = LOWER(?)
+        OR (
+          COALESCE(NULLIF(TRIM(p.metadata->>'odoo_brand'), ''), NULLIF(TRIM(p.metadata->>'brand_name'), '')) IS NULL
+          AND LOWER(p.title) LIKE LOWER(? || '%')
+        )
+      )`)
+      params.push(brand, brand)
+    }
+    if (color) {
+      // Match against product option values (Color option)
+      conditions.push(`p.id IN (
+        SELECT DISTINCT p2.id FROM product p2
+        JOIN product_option po ON po.product_id = p2.id AND po.deleted_at IS NULL
+        JOIN product_option_value pov ON pov.option_id = po.id AND pov.deleted_at IS NULL
+        WHERE LOWER(po.title) IN ('color','colour') AND LOWER(pov.value) = LOWER(?)
+      )`)
+      params.push(color)
     }
     if (inStock === "true") {
       conditions.push("COALESCE((p.metadata->>'stock_qty')::numeric, 0) > 0")
     }
 
-    // Sort mapping
-    let orderBy = "p.created_at DESC"
+    // Sort mapping — outerOrderBy uses column aliases from the subquery SELECT
+    let outerOrderBy = "created_at DESC"
     switch (sort) {
-      case "price_asc": orderBy = "pp.amount ASC NULLS LAST"; break
-      case "price_desc": orderBy = "pp.amount DESC NULLS LAST"; break
-      case "newest": orderBy = "p.created_at DESC"; break
-      case "oldest": orderBy = "p.created_at ASC"; break
-      case "title_asc": orderBy = "p.title ASC"; break
-      case "title_desc": orderBy = "p.title DESC"; break
+      case "price_asc": outerOrderBy = "price ASC NULLS LAST"; break
+      case "price_desc": outerOrderBy = "price DESC NULLS LAST"; break
+      case "newest": outerOrderBy = "created_at DESC"; break
+      case "oldest": outerOrderBy = "created_at ASC"; break
+      case "title_asc": outerOrderBy = "title ASC"; break
+      case "title_desc": outerOrderBy = "title DESC"; break
     }
 
     // Count total
@@ -108,20 +127,23 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     )
     const total = parseInt(countResult.rows[0].total)
 
-    // Get products
+    // Get products — use subquery to deduplicate by product, then sort correctly
     const productsResult = await pgConnection.raw(
-      `SELECT DISTINCT ON (p.id) 
-              p.id, p.title, p.handle, p.thumbnail, p.subtitle,
-              p.description, p.metadata, p.created_at,
-              pp.amount as price, pp.currency_code,
-              pv.id as variant_id, pv.sku
-       FROM product p
-       JOIN product_category_product pcp ON pcp.product_id = p.id
-       LEFT JOIN product_variant pv ON pv.product_id = p.id AND pv.deleted_at IS NULL
-       LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id
-       LEFT JOIN price pp ON pp.price_set_id = pvps.price_set_id AND pp.currency_code = ?
-       WHERE ${conditions.join(" AND ")}
-       ORDER BY p.id, ${orderBy}
+      `SELECT * FROM (
+         SELECT DISTINCT ON (p.id) 
+                p.id, p.title, p.handle, p.thumbnail, p.subtitle,
+                p.description, p.metadata, p.created_at,
+                pp.amount as price, pp.currency_code,
+                pv.id as variant_id, pv.sku
+         FROM product p
+         JOIN product_category_product pcp ON pcp.product_id = p.id
+         LEFT JOIN product_variant pv ON pv.product_id = p.id AND pv.deleted_at IS NULL
+         LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id
+         LEFT JOIN price pp ON pp.price_set_id = pvps.price_set_id AND pp.currency_code = ?
+         WHERE ${conditions.join(" AND ")}
+         ORDER BY p.id, pp.amount ASC NULLS LAST
+       ) deduped
+       ORDER BY ${outerOrderBy}
        LIMIT ? OFFSET ?`,
       [currency, ...params, limit, offset]
     )
@@ -137,8 +159,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         subtitle: p.subtitle,
         price: p.price ? parseFloat(p.price) : null,
         currency_code: p.currency_code || currency,
-        in_stock: (meta.stock_qty || 0) > 0,
-        brand: extractBrand(p.title),
+        in_stock: (meta.odoo_qty || meta.stock_qty || 0) > 0,
+        brand: meta.odoo_brand || extractBrand(p.title),
         created_at: p.created_at,
       }
     })

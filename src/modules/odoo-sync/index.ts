@@ -6,7 +6,7 @@
 import { Module } from "@medusajs/framework/utils"
 import OdooSyncService from "./service"
 
-export const ODOO_SYNC_MODULE = "odoo-sync"
+export const ODOO_SYNC_MODULE = "odoo_sync"
 
 export default Module(ODOO_SYNC_MODULE, {
   service: OdooSyncService,

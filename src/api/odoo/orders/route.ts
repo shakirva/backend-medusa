@@ -26,7 +26,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
   };
 
   try {
-    let whereClause = "WHERE 1=1";
+    let whereClause = "WHERE o.deleted_at IS NULL";
     const params: any[] = [];
 
     // Filter by status

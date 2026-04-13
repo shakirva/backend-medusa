@@ -73,6 +73,7 @@ export default defineConfig({
     sellers: { resolve: "./src/modules/sellers" },
     warranty: { resolve: "./src/modules/warranty" },
     blog: { resolve: "./src/modules/blog" },
+    "odoo_sync": { resolve: "./src/modules/odoo-sync" },
 
     // Notification module for email notifications
     notification: {

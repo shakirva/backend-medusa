@@ -150,8 +150,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     ])
 
     // ── Recommended = Best Sellers (auto, no manual curation needed) ──────────
-    // Count how many times each product appears in completed orders.
-    // Falls back to newest published products if there are no completed orders yet.
+    // ── Recommended = Best Sellers + fill up with newest products ────────────
+    // Priority: products with most completed orders come first (ranked).
+    // If fewer than 24 best sellers exist, pad with newest published products
+    // so the section always looks full. As real orders accumulate, the
+    // best sellers naturally replace the filler products.
+    const RECOMMENDED_LIMIT = 24
     let recommendedFinal: any[] = []
     try {
       const bestSellersResult = await pgConnection.raw(`
@@ -169,22 +173,29 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         GROUP BY p.id, p.title, p.handle, p.subtitle, p.description,
                  p.thumbnail, p.status, p.collection_id, p.created_at, p.metadata
         ORDER BY order_count DESC
-        LIMIT 24
+        LIMIT ${RECOMMENDED_LIMIT}
       `)
       recommendedFinal = bestSellersResult.rows || []
     } catch (e) {
-      // order table may differ — log and fall through to fallback
       console.warn('Best sellers query failed, using fallback:', (e as any)?.message)
     }
 
-    // Fallback: newest published products when no completed orders exist yet
-    if (!recommendedFinal.length) {
-      const fallback = await pgConnection.raw(
-        `SELECT id, title, handle, subtitle, description, thumbnail, status, collection_id, created_at, metadata
-         FROM product WHERE status = 'published'
-         ORDER BY created_at DESC LIMIT 24`
+    // Pad with newest products if we have fewer than RECOMMENDED_LIMIT best sellers
+    if (recommendedFinal.length < RECOMMENDED_LIMIT) {
+      const existingIds = recommendedFinal.map((p: any) => `'${p.id}'`).join(', ')
+      const excludeClause = existingIds.length ? `AND p.id NOT IN (${existingIds})` : ''
+      const needed = RECOMMENDED_LIMIT - recommendedFinal.length
+      const padResult = await pgConnection.raw(
+        `SELECT p.id, p.title, p.handle, p.subtitle, p.description,
+                p.thumbnail, p.status, p.collection_id, p.created_at, p.metadata
+         FROM product p
+         WHERE p.status = 'published' ${excludeClause}
+         ORDER BY p.created_at DESC
+         LIMIT ${needed}`
       )
-      recommendedFinal = fallback.rows || []
+      // Pad rows get order_count = 0 (not yet ordered)
+      const padRows = (padResult.rows || []).map((p: any) => ({ ...p, order_count: 0 }))
+      recommendedFinal = [...recommendedFinal, ...padRows]
     }
 
     // Hydrate with images + variants (same as fetchByCollection does)

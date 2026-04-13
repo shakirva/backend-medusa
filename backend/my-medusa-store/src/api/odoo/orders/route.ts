@@ -82,6 +82,7 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
     const orders = await Promise.all(
       ordersResult.rows.map(async (order: any) => {
         // Get line items (MedusaJS 2.x: order_item links order to order_line_item)
+        // Also fetch odoo_id from product metadata for Odoo matching
         const itemsResult = await pgConnection.raw(
           `SELECT 
             li.id,
@@ -91,9 +92,14 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             li.variant_id,
             li.product_id,
             li.variant_sku as sku,
-            li.variant_title
+            li.variant_title,
+            p.metadata->>'odoo_id' as odoo_product_id,
+            p.metadata->>'odoo_sku' as odoo_sku,
+            pv.barcode
            FROM order_item oi
            JOIN order_line_item li ON oi.item_id = li.id
+           LEFT JOIN product p ON p.id = li.product_id
+           LEFT JOIN product_variant pv ON pv.id = li.variant_id
            WHERE oi.order_id = ?`,
           [order.id]
         );
@@ -139,10 +145,15 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
             title: item.title,
             quantity: item.quantity,
             unit_price: item.unit_price,
+            unit_price_kwd: item.unit_price ? Number(item.unit_price) / 1000 : 0,
             variant_id: item.variant_id,
             product_id: item.product_id,
             sku: item.sku,
+            barcode: item.barcode || null,
             variant_title: item.variant_title,
+            // Odoo matching fields — use these to find the product in Odoo
+            odoo_product_id: item.odoo_product_id ? Number(item.odoo_product_id) : null,
+            odoo_sku: item.odoo_sku || null,
           })),
         };
       })

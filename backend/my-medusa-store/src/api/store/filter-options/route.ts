@@ -83,12 +83,14 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     }
 
     const brandResult = await pgConnection.raw(
-      `SELECT DISTINCT p.metadata->>'brand_name' as brand
+      `SELECT DISTINCT COALESCE(
+          NULLIF(TRIM(p.metadata->>'odoo_brand'), ''),
+          NULLIF(TRIM(p.metadata->>'brand_name'), ''),
+          split_part(TRIM(p.title), ' ', 1)
+        ) as brand
        FROM product p
        WHERE p.deleted_at IS NULL 
          AND p.status = 'published'
-         AND p.metadata->>'brand_name' IS NOT NULL
-         AND p.metadata->>'brand_name' != ''
          ${brandFilter}
        ORDER BY brand`,
       brandParams

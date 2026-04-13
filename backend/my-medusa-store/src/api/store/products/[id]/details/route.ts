@@ -168,8 +168,85 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       }))
     }
 
+    // ── 9. Comparison products (from Odoo alternative_odoo_ids) ──────────
+    // Professional approach: resolve comparison products SERVER-SIDE so the
+    // frontend gets ready-to-render data in a single API call. No extra
+    // requests needed. Each comparison product includes title, image,
+    // price (converted from fils to display units), and its own specs
+    // for side-by-side comparison.
+    const currencyDivisor = (currency === "kwd" || currency === "omr") ? 1000 : 100
+    const currencyDecimals = (currency === "kwd" || currency === "omr") ? 3 : 2
+
+    const altOdooIds: number[] = Array.isArray(metadata.alternative_odoo_ids) ? metadata.alternative_odoo_ids : []
+    const upsellOdooIds: number[] = Array.isArray(metadata.upsell_odoo_ids) ? metadata.upsell_odoo_ids : []
+    const accessoryOdooIds: number[] = Array.isArray(metadata.accessory_odoo_ids) ? metadata.accessory_odoo_ids : []
+    // Merge all comparison IDs (alternative + upsell + accessory), deduplicate
+    const allComparisonOdooIds = [...new Set([...altOdooIds, ...upsellOdooIds, ...accessoryOdooIds])]
+
+    let comparisonProducts: any[] = []
+    if (allComparisonOdooIds.length > 0) {
+      try {
+        // Find products by their odoo_id in metadata
+        const placeholders = allComparisonOdooIds.map(() => "?").join(",")
+        const compResult = await pgConnection.raw(
+          `SELECT p.id, p.title, p.handle, p.thumbnail, p.weight, p.metadata,
+                  pp.amount as price, pp.currency_code
+           FROM product p
+           LEFT JOIN product_variant pv ON pv.product_id = p.id AND pv.deleted_at IS NULL
+           LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id
+           LEFT JOIN price pp ON pp.price_set_id = pvps.price_set_id AND pp.currency_code = ?
+           WHERE (p.metadata->>'odoo_id')::int IN (${placeholders})
+             AND p.status = 'published'
+             AND p.deleted_at IS NULL`,
+          [currency, ...allComparisonOdooIds]
+        )
+
+        comparisonProducts = compResult.rows.map((cp: any) => {
+          const cpMeta = typeof cp.metadata === "string" ? JSON.parse(cp.metadata) : (cp.metadata || {})
+          const rawPrice = cp.price ? parseFloat(cp.price) : 0
+          const displayPrice = rawPrice / currencyDivisor
+
+          // Build specs for this comparison product
+          const cpSpecs: Record<string, string> = {}
+          if (cpMeta.brand) cpSpecs["Brand"] = cpMeta.brand
+          if (cp.weight) cpSpecs["Weight"] = `${cp.weight}g`
+          if (cpMeta.odoo_barcode) cpSpecs["Barcode"] = cpMeta.odoo_barcode
+          if (cpMeta.odoo_sku) cpSpecs["SKU"] = cpMeta.odoo_sku
+          if (cpMeta.odoo_category) {
+            const parts = cpMeta.odoo_category.split(" / ")
+            cpSpecs["Category"] = parts[parts.length - 1]
+          }
+          if (cpMeta.warranty) cpSpecs["Warranty"] = cpMeta.warranty
+          // Include attributes (color, material, etc.)
+          if (cpMeta.attributes && typeof cpMeta.attributes === "object") {
+            for (const [k, v] of Object.entries(cpMeta.attributes)) {
+              if (v) {
+                const key = k.charAt(0).toUpperCase() + k.slice(1)
+                cpSpecs[key] = String(v)
+              }
+            }
+          }
+
+          return {
+            id: cp.id,
+            title: cp.title,
+            handle: cp.handle,
+            thumbnail: cp.thumbnail,
+            odoo_id: cpMeta.odoo_id || null,
+            price: displayPrice,
+            price_formatted: `${displayPrice.toFixed(currencyDecimals)}`,
+            currency_code: cp.currency_code || currency,
+            specifications: cpSpecs,
+          }
+        })
+      } catch (err) {
+        console.warn("[Product Details] Failed to fetch comparison products:", err)
+      }
+    }
+
     // Build specifications from metadata and product fields
     const specifications: Record<string, string> = {}
+    if (metadata.brand) specifications["Brand"] = metadata.brand
     if (product.weight) specifications["Weight"] = `${product.weight}g`
     if (product.length) specifications["Length"] = `${product.length}cm`
     if (product.height) specifications["Height"] = `${product.height}cm`
@@ -182,13 +259,23 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       const catParts = metadata.odoo_category.split(" / ")
       specifications["Category"] = catParts[catParts.length - 1]
     }
+    if (metadata.warranty) specifications["Warranty"] = metadata.warranty
+    // ── Odoo attributes (color, material, size, etc.) → Specifications ──
+    if (metadata.attributes && typeof metadata.attributes === "object") {
+      for (const [k, v] of Object.entries(metadata.attributes)) {
+        if (v) {
+          const key = k.charAt(0).toUpperCase() + k.slice(1)
+          specifications[key] = String(v)
+        }
+      }
+    }
 
     // Build overview
     const overview = {
       description: product.description || "",
       subtitle: product.subtitle || "",
       html_description: metadata.ecommerce_description_html || null,
-      brand: extractBrand(product.title),
+      brand: metadata.brand || metadata.odoo_brand || extractBrand(product.title),
     }
 
     // Build images array
@@ -202,19 +289,24 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       images.unshift({ id: "thumbnail", url: product.thumbnail, rank: -1 })
     }
 
-    // Build variants
-    const variants = variantsResult.rows.map((v: any) => ({
-      id: v.id,
-      title: v.title,
-      sku: v.sku,
-      barcode: v.barcode,
-      price: v.price ? parseFloat(v.price) : null,
-      currency_code: v.currency_code || currency,
-      inventory_quantity: null, // Will be populated from stock
-      allow_backorder: v.allow_backorder,
-      weight: v.weight,
-      metadata: v.variant_metadata,
-    }))
+    // Build variants — convert fils to display price
+    const variants = variantsResult.rows.map((v: any) => {
+      const rawPrice = v.price ? parseFloat(v.price) : null
+      return {
+        id: v.id,
+        title: v.title,
+        sku: v.sku,
+        barcode: v.barcode,
+        price_raw: rawPrice,                                         // fils (for calculations)
+        price: rawPrice != null ? rawPrice / currencyDivisor : null, // display (KWD)
+        price_formatted: rawPrice != null ? (rawPrice / currencyDivisor).toFixed(currencyDecimals) : null,
+        currency_code: v.currency_code || currency,
+        inventory_quantity: null,
+        allow_backorder: v.allow_backorder,
+        weight: v.weight,
+        metadata: v.variant_metadata,
+      }
+    })
 
     // Stock availability
     const in_stock = metadata.stock_qty > 0 || metadata.stock_free_qty > 0
@@ -263,6 +355,10 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         // Related products
         related_products: relatedProducts,
 
+        // Comparison products (alternative + upsell + accessory from Odoo)
+        // Pre-resolved server-side with prices, specs — ready to render
+        comparison_products: comparisonProducts,
+
         // Q&A placeholder (for "Q&A" tab)
         qa: {
           total_questions: 0,
@@ -272,7 +368,31 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
         // Metadata (Odoo sync info)
         odoo_id: metadata.odoo_id || null,
-        brand: extractBrand(product.title),
+        brand: metadata.brand || metadata.odoo_brand || extractBrand(product.title),
+
+        // Currency & price helpers (for frontend display)
+        currency_code: currency,
+        currency_symbol: currency === "kwd" ? "KWD" : currency === "omr" ? "OMR" : currency.toUpperCase(),
+        currency_decimals: currencyDecimals,
+        currency_divisor: currencyDivisor,
+
+        // Metadata passthrough for frontend (Medusa store API strips metadata)
+        metadata_summary: {
+          brand: metadata.brand || metadata.odoo_brand || null,
+          warranty: metadata.warranty || null,
+          is_new: metadata.is_new || false,
+          attributes: metadata.attributes || {},
+          alternative_odoo_ids: altOdooIds,
+          upsell_odoo_ids: upsellOdooIds,
+          accessory_odoo_ids: accessoryOdooIds,
+          night_delivery: metadata.night_delivery || false,
+          fast_delivery_areas: metadata.fast_delivery_areas || [],
+          seo_title: metadata.seo_title || null,
+          seo_description: metadata.seo_description || null,
+          odoo_stock: metadata.odoo_stock || 0,
+          list_price: metadata.list_price || 0,
+          compare_price: metadata.compare_price || 0,
+        },
       },
     })
   } catch (error: any) {

@@ -46,12 +46,12 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const limit = parseInt(req.query.limit as string) || 10
     const offset = (page - 1) * limit
 
-    // Get approved Q&As
+    // Get approved & answered Q&As (customers should see both)
     const qaResult = await pgConnection.raw(
       `SELECT id, question, answer, customer_name, answered_by, 
               answered_at, created_at
        FROM product_qa
-       WHERE product_id = ? AND status = 'approved' AND deleted_at IS NULL
+       WHERE product_id = ? AND status IN ('approved', 'answered') AND deleted_at IS NULL
        ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
       [productId, limit, offset]
@@ -59,7 +59,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
     const countResult = await pgConnection.raw(
       `SELECT COUNT(*) as total FROM product_qa 
-       WHERE product_id = ? AND status = 'approved' AND deleted_at IS NULL`,
+       WHERE product_id = ? AND status IN ('approved', 'answered') AND deleted_at IS NULL`,
       [productId]
     )
 

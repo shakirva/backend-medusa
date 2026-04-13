@@ -57,6 +57,15 @@ export default defineConfig({
       },
     },
 
+    // Payment module - enables payment collections and COD/manual payments
+    // pp_system_default is the built-in provider for Cash on Delivery
+    payment: {
+      resolve: "@medusajs/payment",
+      options: {
+        providers: [],
+      },
+    },
+
     brands: { resolve: "./src/modules/brands" },
     wishlist: { resolve: "./src/modules/wishlist" },
     reviews: { resolve: "./src/modules/reviews" },

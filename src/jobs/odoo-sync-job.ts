@@ -22,10 +22,15 @@ export default async function odooSyncJob(container: MedusaContainer) {
 
   let odooSyncService: any;
   try {
-    odooSyncService = container.resolve("odooSyncService");
+    odooSyncService = container.resolve("odoo_sync");
   } catch {
-    logger.warn("[Odoo Sync Job] OdooSyncService not registered, skipping.");
-    return;
+    // Fallback: try legacy key
+    try {
+      odooSyncService = container.resolve("odooSyncService");
+    } catch {
+      logger.warn("[Odoo Sync Job] OdooSyncService not registered, skipping.");
+      return;
+    }
   }
 
   logger.info("[Odoo Sync Job] Starting delta sync...");
@@ -105,6 +110,57 @@ export default async function odooSyncJob(container: MedusaContainer) {
           medusaProductId = created_product.id;
           created++;
           logger.info(`[Odoo Sync Job] Created: ${medusaData.title} (${medusaProductId})`);
+        }
+
+        // Auto-create and link brand
+        const brandName = odooProduct.brand_id?.[1] || odooProduct.custom_brand_id?.[1] || odooProduct.x_studio_brand_1 || null;
+        const brandOdooId = odooProduct.custom_brand_id?.[0] || odooProduct.brand_id?.[0] || null;
+        // Build brand image URL from Odoo custom.product.brand model
+        const brandImageUrl = brandOdooId
+          ? `https://oskarllc-new-27289548.dev.odoo.com/web/image/custom.product.brand/${brandOdooId}/image_1920`
+          : null;
+
+        if (brandName && typeof brandName === "string") {
+          try {
+            const brandSlug = brandName.toLowerCase().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").substring(0, 100);
+            const existingBrand = await pgConnection.raw(
+              `SELECT id, logo_url FROM brand WHERE slug = ? AND deleted_at IS NULL LIMIT 1`,
+              [brandSlug]
+            );
+            let brandId: string;
+            if (existingBrand.rows?.length > 0) {
+              brandId = existingBrand.rows[0].id;
+              // Update logo_url if we have one and existing is empty or a local /brands/ path
+              const existingLogo = existingBrand.rows[0].logo_url;
+              if (brandImageUrl && (!existingLogo || existingLogo.startsWith("/brands/"))) {
+                await pgConnection.raw(
+                  `UPDATE brand SET logo_url = ?, updated_at = NOW() WHERE id = ?`,
+                  [brandImageUrl, brandId]
+                );
+                logger.info(`[Odoo Sync Job] Updated brand logo: ${brandName} -> ${brandImageUrl}`);
+              }
+            } else {
+              brandId = `brand_${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+              await pgConnection.raw(
+                `INSERT INTO brand (id, name, slug, is_active, is_special, logo_url, created_at, updated_at) VALUES (?, ?, ?, true, true, ?, NOW(), NOW())`,
+                [brandId, brandName, brandSlug, brandImageUrl]
+              );
+              logger.info(`[Odoo Sync Job] Created brand: ${brandName} (${brandId}) logo: ${brandImageUrl || "none"}`);
+            }
+            // Link product to brand
+            const existingLink = await pgConnection.raw(
+              `SELECT id FROM product_brand WHERE product_id = ? AND brand_id = ? AND deleted_at IS NULL LIMIT 1`,
+              [medusaProductId, brandId]
+            );
+            if (!existingLink.rows?.length) {
+              await pgConnection.raw(
+                `INSERT INTO product_brand (id, product_id, brand_id, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())`,
+                [`pbr_${Date.now().toString(36)}${Math.random().toString(36).substring(2, 8)}`, medusaProductId, brandId]
+              );
+            }
+          } catch (brandErr: any) {
+            logger.warn(`[Odoo Sync Job] Brand sync failed for ${medusaData.title}: ${brandErr.message}`);
+          }
         }
 
         // Sync prices via Pricing module

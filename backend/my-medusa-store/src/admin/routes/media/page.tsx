@@ -1,5 +1,5 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk"
-import { Photo, Trash } from "@medusajs/icons"
+import { Photo, PencilSquare } from "@medusajs/icons"
 import { Container, Heading, Button, Input, createDataTableColumnHelper, DataTable, DataTablePaginationState, useDataTable, Drawer, Badge } from "@medusajs/ui"
 import { useRef, useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
@@ -16,6 +16,7 @@ type Media = {
   views?: number | null
   display_order?: number | null
   is_featured?: boolean | null
+  product_ids?: string[]
 }
 
 type MediaResponse = { media: Media[]; count: number }
@@ -25,6 +26,13 @@ type Brand = {
   name: string
   logo_url?: string | null
   is_active: boolean
+}
+
+type Product = {
+  id: string
+  title: string
+  thumbnail?: string | null
+  handle?: string | null
 }
 
 const columnHelper = createDataTableColumnHelper<Media>()
@@ -49,7 +57,6 @@ const BrandLogoPicker = ({
 
   return (
     <div className="relative">
-      {/* Trigger */}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -74,13 +81,10 @@ const BrandLogoPicker = ({
         </svg>
       </button>
 
-      {/* Dropdown */}
       {open && (
         <>
-          {/* Backdrop */}
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden">
-            {/* Clear option */}
             <button
               type="button"
               onClick={() => { onChange(""); setOpen(false) }}
@@ -89,8 +93,6 @@ const BrandLogoPicker = ({
               <span className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-xs">✕</span>
               Clear selection
             </button>
-
-            {/* Brand grid */}
             <div className="max-h-64 overflow-y-auto p-2 grid grid-cols-2 gap-2">
               {brands.length === 0 && (
                 <p className="col-span-2 text-center text-xs text-gray-400 py-4">No brands found</p>
@@ -102,18 +104,11 @@ const BrandLogoPicker = ({
                     key={brand.id}
                     type="button"
                     onClick={() => { onChange(brand.name); setOpen(false) }}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-left ${isSelected
-                        ? "border-violet-400 bg-violet-50"
-                        : "border-gray-100 hover:border-gray-300 hover:bg-gray-50"
-                      }`}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all text-left ${isSelected ? "border-violet-400 bg-violet-50" : "border-gray-100 hover:border-gray-300 hover:bg-gray-50"}`}
                   >
                     <div className="w-8 h-8 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden flex-shrink-0">
                       {brand.logo_url ? (
-                        <img
-                          src={brand.logo_url}
-                          alt={brand.name}
-                          className="max-w-full max-h-full object-contain"
-                        />
+                        <img src={brand.logo_url} alt={brand.name} className="max-w-full max-h-full object-contain" />
                       ) : (
                         <span className="text-xs font-bold text-gray-500">{brand.name[0]}</span>
                       )}
@@ -133,6 +128,77 @@ const BrandLogoPicker = ({
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+// ─── Product Search Picker ────────────────────────────────────────────────────
+const ProductPicker = ({
+  selectedIds,
+  onChange,
+}: {
+  selectedIds: string[]
+  onChange: (ids: string[]) => void
+}) => {
+  const [search, setSearch] = useState("")
+
+  const { data, isLoading } = useQuery<{ products: Product[]; count: number }>({
+    queryKey: ["admin-products-picker", search],
+    queryFn: () => sdk.client.fetch(`/admin/products?q=${encodeURIComponent(search)}&limit=20`, { method: "GET" }),
+    staleTime: 30_000,
+  })
+  const products = data?.products ?? []
+
+  const toggle = (id: string) => {
+    if (selectedIds.includes(id)) {
+      onChange(selectedIds.filter((i) => i !== id))
+    } else {
+      onChange([...selectedIds, id])
+    }
+  }
+
+  return (
+    <div>
+      <Input
+        placeholder="Search products to link…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-2"
+      />
+      {selectedIds.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {selectedIds.map((id) => {
+            const p = products.find((x) => x.id === id)
+            return (
+              <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-100 text-violet-700 text-xs rounded-full">
+                {p?.title || id.substring(0, 12) + "…"}
+                <button type="button" onClick={() => toggle(id)} className="ml-0.5 hover:text-red-500">×</button>
+              </span>
+            )
+          })}
+        </div>
+      )}
+      <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+        {isLoading && <div className="p-3 text-xs text-gray-400 text-center">Loading…</div>}
+        {!isLoading && products.length === 0 && <div className="p-3 text-xs text-gray-400 text-center">No products found</div>}
+        {products.map((p) => {
+          const checked = selectedIds.includes(p.id)
+          return (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => toggle(p.id)}
+              className={`w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-gray-50 transition-colors ${checked ? "bg-violet-50" : ""}`}
+            >
+              <div className="w-8 h-8 rounded bg-gray-100 flex-shrink-0 overflow-hidden">
+                {p.thumbnail ? <img src={p.thumbnail} alt={p.title} className="w-full h-full object-contain" /> : <div className="w-full h-full bg-gray-200" />}
+              </div>
+              <span className="text-xs text-gray-800 flex-1 truncate">{p.title}</span>
+              {checked && <span className="text-violet-500 text-sm">✓</span>}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -173,13 +239,36 @@ const MediaPage = () => {
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
-  const [autoCreate, setAutoCreate] = useState(true)
   const [message, setMessage] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
-  const thumbRef = useRef<HTMLInputElement | null>(null)
 
-  // Upload using XHR so we can get progress events and ensure credentials are sent
-  const handleUpload = async (file: File, isThumbnail = false) => {
+  // ── Edit state ─────────────────────────────────────────────────────────────
+  const [openEdit, setOpenEdit] = useState(false)
+  const [editMedia, setEditMedia] = useState<Partial<Media>>({})
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [editMessage, setEditMessage] = useState<string | null>(null)
+  // ──────────────────────────────────────────────────────────────────────────
+  // Keep a ref mirror of newMedia so async handlers always read fresh values
+  const newMediaRef = useRef<Partial<Media>>({})
+
+  const closeAll = () => {
+    setOpenCreate(false)
+    setOpenEdit(false)
+    setMessage(null)
+    setEditMessage(null)
+    newMediaRef.current = {}
+    setNewMedia({})
+  }
+
+  const updateNewMedia = (updater: (prev: Partial<Media>) => Partial<Media>) => {
+    setNewMedia((prev) => {
+      const next = updater(prev)
+      newMediaRef.current = next
+      return next
+    })
+  }
+
+  const handleUpload = async (file: File) => {
     setUploading(true)
     setProgress(0)
     setMessage(null)
@@ -187,100 +276,63 @@ const MediaPage = () => {
       const form = new FormData()
       form.append('file', file)
 
-      let uploadedUrl: string | null = null
+      let uploadedUrl = ''
       await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest()
         xhr.open('POST', `/admin/media/upload`)
         xhr.withCredentials = true
         xhr.upload.onprogress = (ev) => {
-          if (ev.lengthComputable) {
-            const p = Math.round((ev.loaded / ev.total) * 100)
-            setProgress(p)
-          }
+          if (ev.lengthComputable) setProgress(Math.round((ev.loaded / ev.total) * 100))
         }
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) {
             try {
-              const data = JSON.parse(xhr.responseText)
-              uploadedUrl = data.url
-              if (isThumbnail) {
-                setNewMedia((p) => ({ ...p, thumbnail_url: data.url }))
-              } else {
-                setNewMedia((p) => ({ ...p, url: data.url, mime_type: file.type }))
-              }
-              setMessage('Upload succeeded')
+              const resp = JSON.parse(xhr.responseText)
+              uploadedUrl = resp.url || ''
+              newMediaRef.current = { ...newMediaRef.current, url: uploadedUrl, mime_type: file.type }
+              updateNewMedia((p) => ({ ...p, url: uploadedUrl, mime_type: file.type }))
               resolve()
-            } catch (e) {
-              reject(new Error('Invalid upload response'))
-            }
-          } else {
-            reject(new Error(`Upload failed: ${xhr.status}`))
-          }
+            } catch { reject(new Error('Invalid upload response')) }
+          } else { reject(new Error(`Upload failed ${xhr.status}`)) }
         }
         xhr.onerror = () => reject(new Error('Upload network error'))
         xhr.send(form)
       })
 
-      // Auto-create media record after upload if enabled (only for primary file)
-      if (!isThumbnail && autoCreate && uploadedUrl) {
-        try {
-          setSubmitting(true)
-          const payload: any = {
-            url: uploadedUrl,
-            title: newMedia.title || file.name,
-            title_ar: newMedia.title_ar,
-            mime_type: file.type,
-            brand: newMedia.brand || 'Markasouq',
-            views: newMedia.views || 0,
-            display_order: newMedia.display_order || 0,
-            is_featured: newMedia.is_featured || false
-          }
-          if (newMedia.thumbnail_url) payload.thumbnail_url = newMedia.thumbnail_url
-          await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
-          setMessage('Media record created')
-
-          // Attachment to a gallery was intentionally removed from the create drawer.
-
-          setOpenCreate(false)
-          setNewMedia({})
-          await refetch()
-        } catch (e) {
-          console.error('Auto-create failed', e)
-          setMessage('Media created but failed to refresh list')
-        } finally {
-          setSubmitting(false)
-        }
-      }
-    } catch (e: any) {
-      console.error('Upload failed', e)
-      setMessage(typeof e?.message === 'string' ? e.message : 'Upload failed')
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  const handleCreate = async () => {
-    if (!newMedia.url) return
-    setSubmitting(true)
-    try {
+      // Auto-save the record immediately after upload
+      setSubmitting(true)
+      setMessage('Saving…')
+      const snap = newMediaRef.current
       const payload: any = {
-        url: newMedia.url,
-        title: newMedia.title,
-        title_ar: newMedia.title_ar,
-        mime_type: newMedia.mime_type,
-        brand: newMedia.brand || 'Markasouq',
-        views: newMedia.views || 0,
-        display_order: newMedia.display_order || 0,
-        is_featured: newMedia.is_featured || false
+        url: uploadedUrl,
+        title: snap.title || file.name,
+        title_ar: snap.title_ar || null,
+        mime_type: file.type,
+        brand: snap.brand || 'Markasouq',
+        views: snap.views || 0,
+        display_order: snap.display_order || 0,
+        is_featured: snap.is_featured || false,
+        product_ids: snap.product_ids || [],
       }
-      if (newMedia.thumbnail_url) payload.thumbnail_url = newMedia.thumbnail_url
-      await sdk.client.fetch('/admin/media', { method: 'POST', body: payload })
+      const res = await fetch('/admin/media', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '')
+        throw new Error(`Save failed (${res.status}): ${errText}`)
+      }
+      setMessage('✅ Media created successfully!')
       setOpenCreate(false)
+      newMediaRef.current = {}
       setNewMedia({})
       await refetch()
-    } catch (e) {
-      console.error('Create media failed', e)
+    } catch (e: any) {
+      setMessage(`❌ ${e?.message || 'Upload failed'}`)
     } finally {
+      setUploading(false)
       setSubmitting(false)
     }
   }
@@ -289,6 +341,46 @@ const MediaPage = () => {
     if (!confirm('Delete this media?')) return
     await sdk.client.fetch(`/admin/media/${id}`, { method: 'DELETE' })
     await refetch()
+  }
+
+  const handleEditOpen = (item: Media) => {
+    closeAll()
+    setEditMedia({ ...item })
+    setOpenEdit(true)
+  }
+
+  const handleEditSave = async () => {
+    if (!editMedia.id) return
+    setEditSubmitting(true)
+    setEditMessage(null)
+    try {
+      const res = await fetch(`/admin/media/${editMedia.id}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: editMedia.title || '',
+          title_ar: editMedia.title_ar || null,
+          brand: editMedia.brand || 'Markasouq',
+          views: editMedia.views || 0,
+          display_order: editMedia.display_order || 0,
+          is_featured: editMedia.is_featured || false,
+          product_ids: editMedia.product_ids || [],
+          thumbnail_url: editMedia.thumbnail_url || null,
+        }),
+      })
+      if (!res.ok) {
+        const t = await res.text().catch(() => '')
+        throw new Error(`Save failed (${res.status}): ${t}`)
+      }
+      setEditMessage('✅ Saved successfully!')
+      await refetch()
+      setTimeout(() => { setOpenEdit(false); setEditMessage(null) }, 800)
+    } catch (e: any) {
+      setEditMessage(`❌ ${e?.message || 'Failed to save'}`)
+    } finally {
+      setEditSubmitting(false)
+    }
   }
 
   const columns = [
@@ -311,6 +403,11 @@ const MediaPage = () => {
         )
       )
     }),
+    columnHelper.display({
+      id: 'products', header: 'Products', cell: ({ row }) => (
+        <span className="text-xs text-gray-500">{(row.original.product_ids?.length || 0)} linked</span>
+      )
+    }),
     columnHelper.accessor('views', { header: 'Views', cell: ({ getValue }) => getValue() || 0 }),
     columnHelper.accessor('display_order', { header: 'Order', cell: ({ getValue }) => getValue() || 0 }),
     columnHelper.display({
@@ -321,6 +418,9 @@ const MediaPage = () => {
     columnHelper.display({
       id: 'actions', header: 'Actions', cell: ({ row }) => (
         <div className="flex gap-2">
+          <Button size="small" variant="secondary" onClick={() => handleEditOpen(row.original)}>
+            <PencilSquare className="mr-1" />Edit
+          </Button>
           <Button size="small" variant="danger" onClick={() => handleDelete(row.original.id)}>Delete</Button>
         </div>
       )
@@ -334,107 +434,120 @@ const MediaPage = () => {
       <DataTable instance={table}>
         <DataTable.Toolbar className="flex items-center justify-between">
           <Heading>Media</Heading>
-          <Button variant="primary" onClick={() => setOpenCreate(true)}>Create Media</Button>
+          <Button variant="primary" onClick={() => { closeAll(); setOpenCreate(true); }}>Create Media</Button>
         </DataTable.Toolbar>
         <DataTable.Table />
         <DataTable.Pagination />
       </DataTable>
 
-      <Drawer open={openCreate} onOpenChange={setOpenCreate}>
+      {/* ── Single Drawer — Create mode ─────────────────────────────── */}
+      <Drawer open={openCreate} onOpenChange={(open) => { if (!open) closeAll() }}>
         <Drawer.Header>
           <Drawer.Title>Create Media</Drawer.Title>
         </Drawer.Header>
         <Drawer.Body>
           <div className="flex flex-col gap-4">
-            <Input placeholder="Title (English)" value={newMedia.title || ''} onChange={(e) => setNewMedia((p) => ({ ...p, title: e.target.value }))} />
-            <Input placeholder="Title (Arabic)" value={newMedia.title_ar || ''} onChange={(e) => setNewMedia((p) => ({ ...p, title_ar: e.target.value }))} dir="rtl" />
-
-            {/* Brand Logo Picker */}
+            <Input placeholder="Title (English)" value={newMedia.title || ''} onChange={(e) => updateNewMedia((p) => ({ ...p, title: e.target.value }))} />
+            <Input placeholder="Title (Arabic)" value={newMedia.title_ar || ''} onChange={(e) => updateNewMedia((p) => ({ ...p, title_ar: e.target.value }))} dir="rtl" />
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Brand</label>
-              <BrandLogoPicker
-                value={newMedia.brand || ''}
-                onChange={(name) => setNewMedia((p) => ({ ...p, brand: name }))}
-              />
-              {/* Fallback manual input */}
-              <input
-                type="text"
-                placeholder="Or type brand name manually"
-                value={newMedia.brand || ''}
-                onChange={(e) => setNewMedia((p) => ({ ...p, brand: e.target.value }))}
-                className="mt-2 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-400 text-gray-500 placeholder-gray-400"
-              />
+              <BrandLogoPicker value={newMedia.brand || ''} onChange={(name) => updateNewMedia((p) => ({ ...p, brand: name }))} />
             </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Input placeholder="Display Order" type="number" value={newMedia.display_order || 0} onChange={(e) => setNewMedia((p) => ({ ...p, display_order: parseInt(e.target.value) || 0 }))} />
-              <Input placeholder="Initial Views" type="number" value={newMedia.views || 0} onChange={(e) => setNewMedia((p) => ({ ...p, views: parseInt(e.target.value) || 0 }))} />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Linked Products <span className="text-xs text-gray-400 font-normal">(shown on right side of video)</span>
+              </label>
+              <ProductPicker selectedIds={newMedia.product_ids || []} onChange={(ids) => updateNewMedia((p) => ({ ...p, product_ids: ids }))} />
             </div>
             <div className="flex items-center gap-3">
-              <input id="isFeatured" type="checkbox" checked={!!newMedia.is_featured} onChange={(e) => setNewMedia((p) => ({ ...p, is_featured: e.target.checked }))} />
+              <input id="isFeatured" type="checkbox" checked={!!newMedia.is_featured} onChange={(e) => updateNewMedia((p) => ({ ...p, is_featured: e.target.checked }))} />
               <label htmlFor="isFeatured" className="text-sm">Featured Video (show prominently)</label>
             </div>
-            <Input placeholder="Mime Type (auto-detected)" value={newMedia.mime_type || ''} onChange={(e) => setNewMedia((p) => ({ ...p, mime_type: e.target.value }))} />
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Upload File <span className="text-xs text-gray-400 font-normal">(image or video — saves automatically)</span>
+              </label>
               <div
                 onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  const f = e.dataTransfer?.files?.[0]
-                  if (f) handleUpload(f)
-                }}
-                className="p-4 border-dashed border-2 border-gray-300 rounded mb-3 text-center"
+                onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) handleUpload(f) }}
+                className="p-6 border-dashed border-2 border-gray-300 rounded-lg text-center hover:border-violet-400 transition-colors"
               >
-                <div className="mb-2">Drag &amp; drop an image or video here, or</div>
                 <input ref={fileRef} type="file" accept="image/*,video/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f) }} />
-                <Button onClick={() => fileRef.current?.click()} isLoading={uploading} variant="secondary">Select File</Button>
+                <p className="text-sm text-gray-500 mb-3">Drag &amp; drop an image or video here, or</p>
+                <Button onClick={() => fileRef.current?.click()} isLoading={uploading || submitting} variant="secondary">
+                  {uploading ? `Uploading ${progress}%…` : submitting ? 'Saving…' : 'Select File'}
+                </Button>
               </div>
-
-              {uploading && (
-                <div className="mb-2">Uploading: {progress}%</div>
-              )}
-
-              {message && <div className="text-sm text-gray-600 mb-2">{message}</div>}
-
-              <div className="flex items-center gap-3 mb-3">
-                <input id="autoCreate" type="checkbox" checked={autoCreate} onChange={(e) => setAutoCreate(e.target.checked)} />
-                <label htmlFor="autoCreate" className="text-sm">Automatically create media record after upload</label>
-              </div>
-
-              {/* Gallery attachment removed from quick-create drawer per UX request. */}
-
-              <div className="mb-3">
-                <label className="text-sm block mb-1">Thumbnail (optional)</label>
-                <div className="flex items-center gap-2">
-                  <input ref={thumbRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUpload(f, true) }} />
-                  <Button onClick={() => thumbRef.current?.click()} isLoading={uploading} variant="secondary">Upload Thumbnail</Button>
-                  {newMedia.thumbnail_url ? (
-                    <div className="flex items-center gap-2">
-                      <img src={String(newMedia.thumbnail_url)} className="w-24 h-16 object-contain" />
-                      <Button variant="danger" size="small" onClick={() => setNewMedia((p) => ({ ...p, thumbnail_url: undefined }))}><Trash /></Button>
-                    </div>
-                  ) : (
-                    <div className="text-xs text-gray-500">Optional poster image for videos</div>
-                  )}
-                </div>
-              </div>
-
-              {newMedia.url && (
-                <div className="mt-3">
-                  <a href={String(newMedia.url)} target="_blank" rel="noreferrer">{String(newMedia.url)}</a>
+              {message && (
+                <div className={`mt-2 text-sm px-3 py-2 rounded ${message.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                  {message}
                 </div>
               )}
             </div>
           </div>
         </Drawer.Body>
         <Drawer.Footer>
-          <Drawer.Close asChild><Button variant="secondary">Cancel</Button></Drawer.Close>
-          <Button isLoading={submitting} onClick={handleCreate}>Create</Button>
+          <div className="flex gap-2 w-full justify-end">
+            <Drawer.Close asChild>
+              <Button variant="secondary" onClick={closeAll}>Cancel</Button>
+            </Drawer.Close>
+          </div>
         </Drawer.Footer>
       </Drawer>
+
+      {/* ── Single Drawer — Edit mode ───────────────────────────────── */}
+      <Drawer open={openEdit} onOpenChange={(open) => { if (!open) closeAll() }}>
+        <Drawer.Header>
+          <Drawer.Title>Edit Media</Drawer.Title>
+        </Drawer.Header>
+        <Drawer.Body>
+          <div className="flex flex-col gap-4">
+            {editMedia.url && (
+              <div className="flex justify-center bg-gray-50 rounded-lg p-3 border border-gray-200">
+                {editMedia.mime_type?.startsWith('video') ? (
+                  <video src={editMedia.url} poster={editMedia.thumbnail_url || undefined} className="max-h-40 rounded" controls />
+                ) : (
+                  <img src={editMedia.url} className="max-h-40 object-contain rounded" />
+                )}
+              </div>
+            )}
+            <Input placeholder="Title (English)" value={editMedia.title || ''} onChange={(e) => setEditMedia((p) => ({ ...p, title: e.target.value }))} />
+            <Input placeholder="Title (Arabic)" value={editMedia.title_ar || ''} onChange={(e) => setEditMedia((p) => ({ ...p, title_ar: e.target.value }))} dir="rtl" />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Brand</label>
+              <BrandLogoPicker value={editMedia.brand || ''} onChange={(name) => setEditMedia((p) => ({ ...p, brand: name }))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Linked Products <span className="text-xs text-gray-400 font-normal">(shown on right side of video)</span>
+              </label>
+              <ProductPicker selectedIds={editMedia.product_ids || []} onChange={(ids) => setEditMedia((p) => ({ ...p, product_ids: ids }))} />
+            </div>
+            <div className="flex items-center gap-3">
+              <input id="editIsFeatured" type="checkbox" checked={!!editMedia.is_featured} onChange={(e) => setEditMedia((p) => ({ ...p, is_featured: e.target.checked }))} />
+              <label htmlFor="editIsFeatured" className="text-sm">Featured Video (show prominently)</label>
+            </div>
+            {editMessage && (
+              <div className={`text-sm px-3 py-2 rounded ${editMessage.includes('❌') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                {editMessage}
+              </div>
+            )}
+          </div>
+        </Drawer.Body>
+        <Drawer.Footer>
+          <div className="flex gap-2 w-full justify-end">
+            <Drawer.Close asChild>
+              <Button variant="secondary" onClick={closeAll}>Cancel</Button>
+            </Drawer.Close>
+            <Button isLoading={editSubmitting} onClick={handleEditSave}>Save Changes</Button>
+          </div>
+        </Drawer.Footer>
+      </Drawer>
+
     </Container>
   )
 }
 
 export const config = defineRouteConfig({ label: 'Media', icon: Photo })
 export default MediaPage
+

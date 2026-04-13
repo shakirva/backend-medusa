@@ -16,6 +16,7 @@ const Media = model.define("media", {
   views: model.number().default(0), // View count for analytics
   display_order: model.number().default(0), // Order in gallery
   is_featured: model.boolean().default(false), // Featured videos
+  product_ids: model.json().nullable(), // Array of Medusa product IDs linked to this media
   metadata: model.json().nullable(),
 });
 

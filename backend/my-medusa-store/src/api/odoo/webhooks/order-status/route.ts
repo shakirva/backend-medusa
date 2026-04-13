@@ -1,5 +1,6 @@
 import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils";
+import { sendOrderStatusEmail, OrderEmailType } from "../../../../lib/email";
 
 /**
  * POST /odoo/webhooks/order-status
@@ -177,6 +178,102 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
       `UPDATE "order" SET metadata = ?, updated_at = NOW() WHERE id = ?`,
       [JSON.stringify(metadataUpdate), medusaOrderId]
     );
+
+    // ── Send customer email notification ────────────────────────────────────
+    // Fetch order email + items from DB for the email
+    const emailEventMap: Record<string, OrderEmailType | null> = {
+      "order.confirmed": "order.confirmed",
+      "order.shipped": "order.shipped",
+      "order.delivered": "order.delivered",
+      "order.cancelled": "order.cancelled",
+      "order.invoiced": null,
+      "order.paid": null,
+    };
+
+    const emailType = emailEventMap[event_type];
+    if (emailType) {
+      try {
+        // Get order details for email
+        const orderEmailData = await pgConnection.raw(
+          `SELECT o.id, o.display_id, o.email, o.currency_code, o.total, o.subtotal,
+                  sa.first_name, sa.address_1, sa.city, sa.country_code
+           FROM "order" o
+           LEFT JOIN "address" sa ON sa.id = o.shipping_address_id
+           WHERE o.id = ?`,
+          [medusaOrderId]
+        );
+
+        const orderItemsData = await pgConnection.raw(
+          `SELECT title, quantity, unit_price FROM "order_line_item"
+           WHERE order_id = ?`,
+          [medusaOrderId]
+        );
+
+        const oRow = orderEmailData.rows?.[0];
+        if (oRow?.email) {
+          const shippingAddress = [oRow.address_1, oRow.city, oRow.country_code?.toUpperCase()]
+            .filter(Boolean)
+            .join(", ");
+
+          await sendOrderStatusEmail(emailType, oRow.email, {
+            customerName: oRow.first_name || "Valued Customer",
+            orderId: medusaOrderId,
+            displayId: oRow.display_id,
+            items: (orderItemsData.rows || []).map((item: any) => ({
+              title: item.title || "Product",
+              quantity: item.quantity,
+              unit_price: item.unit_price || 0,
+            })),
+            total: Number(oRow.total || 0),
+            subtotal: Number(oRow.subtotal || 0),
+            currencyCode: oRow.currency_code || "kwd",
+            shippingAddress: shippingAddress || undefined,
+            trackingNumber: order.tracking_number,
+            trackingUrl: order.tracking_url,
+            carrierName: order.carrier_name,
+            cancelledReason: order.cancelled_reason,
+          });
+          console.log(`[Odoo Webhook] ✅ Email sent: ${emailType} → ${oRow.email}`);
+        }
+      } catch (emailErr: any) {
+        // Don't fail the webhook if email fails
+        console.error(`[Odoo Webhook] ⚠️ Email send failed: ${emailErr.message}`);
+      }
+    }
+
+    // ── Emit event for push notification subscriber ──────────────────────────
+    const pushEvents = ["order.confirmed", "order.shipped", "order.delivered", "order.cancelled"];
+    if (pushEvents.includes(event_type)) {
+      try {
+        // Get customer_id for the order
+        const customerRow = await pgConnection.raw(
+          `SELECT customer_id, display_id FROM "order" WHERE id = ?`,
+          [medusaOrderId]
+        );
+        const customerId = customerRow.rows?.[0]?.customer_id;
+        const displayId = customerRow.rows?.[0]?.display_id;
+
+        if (customerId) {
+          const eventBus = req.scope.resolve(Modules.EVENT_BUS);
+          await eventBus.emit({
+            name: "order.status.updated",
+            data: {
+              order_id: medusaOrderId,
+              customer_id: customerId,
+              display_id: displayId,
+              event_type,
+              tracking_number: order.tracking_number,
+              tracking_url: order.tracking_url,
+              carrier_name: order.carrier_name,
+            },
+          });
+          console.log(`[Odoo Webhook] ✅ Push event emitted: order.status.updated (${event_type})`);
+        }
+      } catch (pushErr: any) {
+        console.warn(`[Odoo Webhook] ⚠️ Push event emit failed: ${pushErr.message}`);
+      }
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     res.json({
       success: true,
