@@ -15,7 +15,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     const { cartId, productId, areaCode } = req.query as Record<string, string>
 
     // Get the shipping service - will be registered in module index
-    const shippingService = req.scope.resolve("shippingService")
+    const shippingService = req.scope.resolve("shippingService") as any
 
     if (!shippingService) {
       return res.status(500).json({
@@ -55,7 +55,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
  */
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
   try {
-    const { method, productId, areaCode } = req.body
+    const { method, productId, areaCode } = (req.body || {}) as Record<string, string>
 
     if (!method) {
       return res.status(400).json({
@@ -63,7 +63,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       })
     }
 
-    const shippingService = req.scope.resolve("shippingService")
+    const shippingService = req.scope.resolve("shippingService") as any
 
     if (!shippingService) {
       return res.status(500).json({
