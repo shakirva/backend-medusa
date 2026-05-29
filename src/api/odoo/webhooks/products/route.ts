@@ -487,6 +487,8 @@ async function upsertProduct(
     if (varRes.rows?.length > 0) {
       const vid = varRes.rows[0].vid
       try {
+        let invItemId: string | null = null
+
         // Check if inventory_item exists
         const invItemRes = await pg.raw(
           `SELECT id FROM inventory_item WHERE sku = ? LIMIT 1`,
@@ -494,8 +496,7 @@ async function upsertProduct(
         )
 
         if (invItemRes.rows?.length > 0) {
-          // Update existing
-          const invItemId = invItemRes.rows[0].id
+          invItemId = invItemRes.rows[0].id
           const invLvlRes = await pg.raw(
             `SELECT id FROM inventory_level WHERE inventory_item_id = ? LIMIT 1`,
             [invItemId]
@@ -506,7 +507,6 @@ async function upsertProduct(
               [qty, invLvlRes.rows[0].id]
             )
           } else {
-            // Create level if missing
             const locRes = await pg.raw(`SELECT id FROM stock_location LIMIT 1`)
             if (locRes.rows?.length > 0) {
               await pg.raw(
@@ -517,8 +517,7 @@ async function upsertProduct(
             }
           }
         } else {
-          // Create inventory_item + level
-          const invItemId = genId("iitem")
+          invItemId = genId("iitem")
           await pg.raw(
             `INSERT INTO inventory_item (id, sku, title, created_at, updated_at)
              VALUES (?, ?, ?, NOW(), NOW())`,
@@ -530,6 +529,23 @@ async function upsertProduct(
               `INSERT INTO inventory_level (id, inventory_item_id, location_id, stocked_quantity, reserved_quantity, incoming_quantity, created_at, updated_at)
                VALUES (?, ?, ?, ?, 0, 0, NOW(), NOW())`,
               [genId("iloc"), invItemId, locRes.rows[0].id, qty]
+            )
+          }
+        }
+
+        // CRITICAL FIX: Link the variant to the inventory item so Medusa knows about it
+        if (invItemId) {
+          const linkRes = await pg.raw(
+            `SELECT id FROM product_variant_inventory_item WHERE variant_id = ? AND inventory_item_id = ? LIMIT 1`,
+            [vid, invItemId]
+          )
+          if (linkRes.rows?.length === 0) {
+            // Check if it's linked to a wrong item, if so, delete the wrong link
+            await pg.raw(`DELETE FROM product_variant_inventory_item WHERE variant_id = ?`, [vid])
+            await pg.raw(
+              `INSERT INTO product_variant_inventory_item (id, variant_id, inventory_item_id, required_quantity, created_at, updated_at)
+               VALUES (?, ?, ?, 1, NOW(), NOW())`,
+              [genId("pvitem"), vid, invItemId]
             )
           }
         }
@@ -716,6 +732,13 @@ async function upsertProduct(
         [genId("iloc"), invItemId, locRes.rows[0].id, qty]
       )
     }
+    
+    // CRITICAL FIX: Link the variant to the inventory item
+    await pg.raw(
+      `INSERT INTO product_variant_inventory_item (id, variant_id, inventory_item_id, required_quantity, created_at, updated_at)
+       VALUES (?, ?, ?, 1, NOW(), NOW())`,
+      [genId("pvitem"), variantId, invItemId]
+    )
   } catch (err) {
     console.warn(`[Odoo Webhook] Inventory sync failed for ${sku}: ${err}`)
   }
