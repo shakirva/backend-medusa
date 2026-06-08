@@ -652,9 +652,9 @@ class OdooSyncService {
     try {
       return this.searchRead(
         "product.public.category",
-        [],
-        ["id", "name", "parent_id", "parent_path", "sequence", "website_id", "image_128"],
-        500,
+        [["medusa_sync", "=", true]],
+        ["id", "name", "parent_id", "parent_path", "sequence", "website_id", "image_128", "medusa_sync"],
+        1000,
         0,
         "sequence asc"
       ) as Promise<OdooPublicCategory[]>
@@ -974,7 +974,7 @@ class OdooSyncService {
           sku: (product.default_code as string) || `ODOO-${product.id}`,
           barcode: (product.barcode as string) || undefined,
           manage_inventory: product.is_storable || false,
-          allow_backorder: product.allow_out_of_stock_order || false,
+          allow_backorder: true, // Always allow backorder so Medusa doesn't block carts; Odoo is the source of truth for stock
           inventory_quantity: Math.floor(product.qty_available || 0),
           weight: product.weight || 0,
           metadata: {
