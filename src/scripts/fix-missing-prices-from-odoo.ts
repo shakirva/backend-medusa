@@ -35,7 +35,7 @@ export default async function fixMissingPrices({ container }: ExecArgs) {
          continue
       }
       
-      const price = odooProduct.list_price || odooProduct.lst_price || 0
+      const price = odooProduct.list_price || (odooProduct as any).lst_price || 0
       
       if (price > 0) {
         const priceSet = await pricingService.createPriceSets({
