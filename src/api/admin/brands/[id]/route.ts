@@ -37,6 +37,8 @@ export async function PUT(
     const body = (req.body || {}) as any
     const brandId = req.params.id
 
+    console.log(`PUT /admin/brands/${brandId} - incoming body:`, JSON.stringify(body))
+
     // Build clean update object — never overwrite `id`
     const updates: Record<string, any> = {}
     if (body.name !== undefined)        updates.name = body.name
@@ -51,6 +53,8 @@ export async function PUT(
     // Cast booleans explicitly (they can arrive as strings from some HTTP clients)
     if (body.is_active !== undefined)   updates.is_active  = body.is_active  === true || body.is_active  === 'true'
     if (body.is_special !== undefined)  updates.is_special = body.is_special === true || body.is_special === 'true'
+
+    console.log(`PUT /admin/brands/${brandId} - parsed updates:`, JSON.stringify(updates))
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ message: 'No update fields provided' })
