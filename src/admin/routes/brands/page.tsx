@@ -723,7 +723,7 @@ const BrandsPage = () => {
 
   const { data, isLoading, error } = useQuery<BrandsResponse>({
     queryKey: ["brands"],
-    queryFn: async () => sdk.client.fetch("/admin/brands", { method: "GET" }) as Promise<BrandsResponse>,
+    queryFn: async () => sdk.client.fetch("/admin/brands?limit=100", { method: "GET" }) as Promise<BrandsResponse>,
   })
 
   const createMutation = useMutation({
