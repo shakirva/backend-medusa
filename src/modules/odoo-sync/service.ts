@@ -601,15 +601,15 @@ class OdooSyncService {
     await this.ensureAuth()
     try {
       const brands = await this.searchRead(
-        "product.brand",
+        "custom.product.brand",
         [],
-        ["id", "name", "logo", "description"],
+        ["id", "name", "image_1920", "description"],
         500
       )
       return brands as OdooBrand[]
     } catch (error: any) {
-      // product.brand model may not exist in all Odoo installations
-      console.warn("⚠️  product.brand model not available:", error.message)
+      // custom.product.brand model may not exist in all Odoo installations
+      console.warn("⚠️  custom.product.brand model not available:", error.message)
       return []
     }
   }
@@ -620,7 +620,7 @@ class OdooSyncService {
   async fetchBrandById(brandId: number): Promise<OdooBrand | null> {
     await this.ensureAuth()
     try {
-      const brands = await this.read("product.brand", [brandId], ["id", "name", "logo", "description"])
+      const brands = await this.read("custom.product.brand", [brandId], ["id", "name", "image_1920", "description"])
       return brands.length > 0 ? (brands[0] as OdooBrand) : null
     } catch {
       return null
