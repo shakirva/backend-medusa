@@ -502,24 +502,24 @@ const BrandFormDrawer = ({
   brand: Brand | null
   onSave: (data: any) => void
 }) => {
-  const [name, setName] = useState(brand?.name || "")
-  const [description, setDescription] = useState(brand?.description || "")
+  // State is initialized directly from brand at mount.
+  // The parent uses key={brand?.id ?? "new"} to force remount when brand changes.
+  const [name, setName] = useState(() => brand?.name || "")
+  const [description, setDescription] = useState(() => brand?.description || "")
   const [logoFile, setLogoFile] = useState<File | null>(null)
-  const [logoPreview, setLogoPreview] = useState(brand?.logo_url || "")
-  const [isActive, setIsActive] = useState(brand?.is_active ?? true)
-  const [isSpecial, setIsSpecial] = useState(brand?.is_special ?? false)
+  // Logo preview: relative paths like /brands/... must be prefixed with the storefront domain
+  // because the admin lives on a different subdomain.
+  const toPreviewUrl = (url: string | undefined) => {
+    if (!url) return ""
+    if (url.startsWith("http")) return url
+    if (url.startsWith("/static/")) return `https://admin.markasouqs.com${url}`
+    return `https://website.markasouqs.com${url}`
+  }
+  const [logoPreview, setLogoPreview] = useState(() => toPreviewUrl(brand?.logo_url))
+  const [isActive, setIsActive] = useState(() => brand?.is_active ?? true)
+  const [isSpecial, setIsSpecial] = useState(() => brand?.is_special ?? false)
   const [isLoading, setIsLoading] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-
-  // Reset when brand changes
-  useEffect(() => {
-    setName(brand?.name || "")
-    setDescription(brand?.description || "")
-    setLogoFile(null)
-    setLogoPreview(brand?.logo_url || "")
-    setIsActive(brand?.is_active ?? true)
-    setIsSpecial(brand?.is_special ?? false)
-  }, [brand])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -532,6 +532,10 @@ const BrandFormDrawer = ({
   }
 
   const handleSubmit = async () => {
+    if (!name.trim()) {
+      setSaveError("Brand name is required")
+      return
+    }
     setIsLoading(true)
     setSaveError(null)
     try {
@@ -545,12 +549,9 @@ const BrandFormDrawer = ({
           credentials: "include",
         })
         const uploadData = await uploadRes.json()
-        // Handle both response shapes:
-        // 1. Custom adminMultipartGuard middleware → { url, filename, size, mimetype }
-        // 2. Medusa native /admin/uploads        → { uploads: [{ url }] }
         const resolved =
-          uploadData?.url ||                      // middleware shape
-          uploadData?.uploads?.[0]?.url ||         // native shape
+          uploadData?.url ||
+          uploadData?.uploads?.[0]?.url ||
           null
         if (!uploadRes.ok || !resolved) {
           console.error("Upload failed:", uploadData)
@@ -558,7 +559,7 @@ const BrandFormDrawer = ({
         }
         logoUrl = resolved
       }
-      onSave({ id: brand?.id, name, description, logo_url: logoUrl, is_active: isActive, is_special: isSpecial })
+      onSave({ id: brand?.id, name: name.trim(), description, logo_url: logoUrl, is_active: isActive, is_special: isSpecial })
     } catch (error: any) {
       console.error("Error saving brand:", error)
       setSaveError(error?.message || "Failed to save brand")
