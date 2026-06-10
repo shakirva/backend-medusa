@@ -731,7 +731,7 @@ const BrandsPage = () => {
       sdk.client.fetch("/admin/brands", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(brandData),
+        body: brandData,  // sdk.client.fetch serializes automatically — do NOT JSON.stringify
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["brands"] })
@@ -745,7 +745,7 @@ const BrandsPage = () => {
       sdk.client.fetch(`/admin/brands/${brandData.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(brandData),
+        body: brandData,  // sdk.client.fetch serializes automatically — do NOT JSON.stringify
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["brands"] })
@@ -895,8 +895,9 @@ const BrandsPage = () => {
         )}
       </Container>
 
-      {/* Brand create / edit drawer */}
+      {/* Brand create / edit drawer — key forces remount on different brand to reset all form state */}
       <BrandFormDrawer
+        key={editingBrand?.id ?? "new"}
         isOpen={isDrawerOpen}
         onClose={() => { setIsDrawerOpen(false); setEditingBrand(null) }}
         brand={editingBrand}
