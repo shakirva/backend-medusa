@@ -35,12 +35,29 @@ export async function PUT(
   try {
     const brandModuleService = req.scope.resolve<BrandService>(BRAND_MODULE)
     const body = (req.body || {}) as any
-    // Normalize fields: accept `logo` (from admin UI) as `logo_url` expected by the service
-    const updates: any = { ...body }
-    if (body.logo && !body.logo_url) updates.logo_url = body.logo
-    if (body.banner && !body.banner_url) updates.banner_url = body.banner
+    const brandId = req.params.id
 
-    const brand = await brandModuleService.updateBrands({ id: req.params.id }, updates)
+    // Build clean update object — never overwrite `id`
+    const updates: Record<string, any> = {}
+    if (body.name !== undefined)        updates.name = body.name
+    if (body.description !== undefined) updates.description = body.description
+    if (body.slug !== undefined)        updates.slug = body.slug
+    if (body.logo_url !== undefined)    updates.logo_url = body.logo_url
+    if (body.logo !== undefined && !body.logo_url) updates.logo_url = body.logo
+    if (body.banner_url !== undefined)  updates.banner_url = body.banner_url
+    if (body.banner !== undefined && !body.banner_url) updates.banner_url = body.banner
+    if (body.display_order !== undefined) updates.display_order = Number(body.display_order)
+
+    // Cast booleans explicitly (they can arrive as strings from some HTTP clients)
+    if (body.is_active !== undefined)   updates.is_active  = body.is_active  === true || body.is_active  === 'true'
+    if (body.is_special !== undefined)  updates.is_special = body.is_special === true || body.is_special === 'true'
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: 'No update fields provided' })
+    }
+
+    // MedusaService.updateBrands(selector, data)
+    const brand = await brandModuleService.updateBrands({ id: brandId }, updates)
     res.json({ brand })
   } catch (e: any) {
     console.error('Admin brand PUT error:', e)
