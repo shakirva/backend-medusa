@@ -61,20 +61,30 @@ async function main() {
   if (!uid) { console.error('Odoo auth failed'); process.exit(1); }
   console.log('✅ Odoo UID:', uid);
 
-  // 2. Fetch brands with logo field
-  const brands = await jsonrpc({
-    service: 'object', method: 'execute_kw',
-    args: [ODOO_DB, uid, ODOO_KEY, 'product.brand', 'search_read', [[]], {
-      fields: ['id', 'name', 'logo'],
-      limit: 200,
-    }],
-  });
+  // 2. Fetch brands - try both Odoo model names
+  let brands = [];
+  for (const model of ['custom.product.brand', 'product.brand']) {
+    try {
+      brands = await jsonrpc({
+        service: 'object', method: 'execute_kw',
+        args: [ODOO_DB, uid, ODOO_KEY, model, 'search_read', [[]], {
+          fields: ['id', 'name', 'logo', 'image_1920', 'image_128'],
+          limit: 200,
+        }],
+      });
+      console.log(`Using model ${model}, got ${brands.length} brands`);
+      break;
+    } catch (e) {
+      console.log(`Model ${model} failed: ${e.message.substring(0, 80)}`);
+    }
+  }
   console.log('Fetched brands from Odoo:', brands.length);
 
   let saved = 0;
   for (const b of brands) {
     const name = (b.name || '').trim();
-    const img  = b.logo;
+    // Try all possible image fields
+    const img = b.logo || b.image_1920 || b.image_128;
 
     if (!img || img === true || img.length < 200) {
       console.log('  ⚠️  No logo:', name);
