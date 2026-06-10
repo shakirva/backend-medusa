@@ -68,8 +68,8 @@ export async function PUT(
     
     // Then manually force the boolean fields in the DB
     if (body.is_active !== undefined || body.is_special !== undefined) {
-      const active = body.is_active !== undefined ? (body.is_active === true || body.is_active === 'true') : brand[0]?.is_active
-      const special = body.is_special !== undefined ? (body.is_special === true || body.is_special === 'true') : brand[0]?.is_special
+      const active = body.is_active !== undefined ? (body.is_active === true || body.is_active === 'true') : (brand as any).is_active
+      const special = body.is_special !== undefined ? (body.is_special === true || body.is_special === 'true') : (brand as any).is_special
       
       await pgConnection.raw(
         `UPDATE brand SET is_active = ?, is_special = ?, updated_at = NOW() WHERE id = ?`,
