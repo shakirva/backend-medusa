@@ -60,9 +60,27 @@ export async function PUT(
       return res.status(400).json({ message: 'No update fields provided' })
     }
 
-    // MedusaService.updateBrands(selector, data)
+    // Use raw SQL update to bypass Medusa v2 DML bug dropping false booleans
+    const pgConnection = req.scope.resolve("__pg_connection__")
+    
+    // First let Medusa update standard text fields
     const brand = await brandModuleService.updateBrands({ id: brandId }, updates)
-    res.json({ brand })
+    
+    // Then manually force the boolean fields in the DB
+    if (body.is_active !== undefined || body.is_special !== undefined) {
+      const active = body.is_active !== undefined ? (body.is_active === true || body.is_active === 'true') : brand[0]?.is_active
+      const special = body.is_special !== undefined ? (body.is_special === true || body.is_special === 'true') : brand[0]?.is_special
+      
+      await pgConnection.raw(
+        `UPDATE brand SET is_active = ?, is_special = ?, updated_at = NOW() WHERE id = ?`,
+        [active, special, brandId]
+      )
+    }
+
+    // Refetch to get the latest correct state
+    const finalBrand = await brandModuleService.retrieveBrand(brandId)
+    
+    res.json({ brand: [finalBrand] })
   } catch (e: any) {
     console.error('Admin brand PUT error:', e)
     res.status(500).json({ message: e?.message || 'Failed to update brand' })
