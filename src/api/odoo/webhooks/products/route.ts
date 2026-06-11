@@ -297,8 +297,12 @@ async function upsertProduct(
   const odooId = p.odoo_id
   const sku = p.default_code || `ODOO-${odooId}`
   const title = p.name || `Odoo Product ${odooId}`
-  const price = p.list_price || 0
-  const currency = (p.currency_code || "aed").toLowerCase()
+  const currency = (p.currency_code || "kwd").toLowerCase()
+  // Medusa stores prices in smallest unit (micro-units = actual × 1,000,000 for most currencies)
+  // KWD/OMR (3 decimal places): 1 KWD = 1,000,000 micro-units
+  // AED/USD/EUR (2 decimal places): 1 AED = 1,000,000 micro-units (Medusa uses 1M for all)
+  const rawPrice = p.list_price || 0
+  const price = Math.round(rawPrice * 1_000_000)
   const description = p.description_sale || p.description || ""
   const weight = p.weight ? String(p.weight) : null
   const status = p.is_published === false ? "draft" : "published"
@@ -827,6 +831,24 @@ async function upsertProduct(
     )
   } catch (err) {
     console.warn(`[Odoo Webhook] Inventory sync failed for ${sku}: ${err}`)
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // SHIPPING PROFILE LINK — required for checkout to work
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  try {
+    const spRes = await pg.raw(`SELECT id FROM shipping_profile WHERE type = 'default' AND deleted_at IS NULL LIMIT 1`)
+    if (spRes.rows?.length > 0) {
+      const spId = spRes.rows[0].id
+      await pg.raw(
+        `INSERT INTO product_shipping_profile (id, product_id, shipping_profile_id, created_at, updated_at)
+         VALUES (?, ?, ?, NOW(), NOW())
+         ON CONFLICT (product_id, shipping_profile_id) DO NOTHING`,
+        ['sprod_' + productId.replace('prod_', '').substring(0, 26), productId, spId]
+      )
+    }
+  } catch (spErr) {
+    console.warn(`[Odoo Webhook] Shipping profile link failed for ${productId}: ${spErr}`)
   }
 
   return { action: "created", productId }
