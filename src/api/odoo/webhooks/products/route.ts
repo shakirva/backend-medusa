@@ -444,6 +444,13 @@ async function upsertProduct(
       `SELECT pv.id as vid, pvps.price_set_id as psid FROM product_variant pv LEFT JOIN product_variant_price_set pvps ON pvps.variant_id = pv.id WHERE pv.product_id = ? AND pv.deleted_at IS NULL LIMIT 1`,
       [prodId]
     )
+    // Always ensure allow_backorder=true on update
+    if (varRes.rows?.length > 0) {
+      await pg.raw(
+        `UPDATE product_variant SET allow_backorder = true, updated_at = NOW() WHERE id = ?`,
+        [varRes.rows[0].vid]
+      )
+    }
     // Always update barcode with cleaned value on update
     if (varRes.rows?.length > 0 && barcode) {
       await pg.raw(
@@ -653,7 +660,7 @@ async function upsertProduct(
     variantId = genId("variant")
     await pg.raw(
       `INSERT INTO product_variant (id, product_id, title, sku, barcode, manage_inventory, allow_backorder, variant_rank, created_at, updated_at)
-       VALUES (?, ?, 'Default', ?, ?, true, false, 0, NOW(), NOW())`,
+       VALUES (?, ?, 'Default', ?, ?, true, true, 0, NOW(), NOW())`,
       [variantId, productId, sku, barcode]
     )
   }
