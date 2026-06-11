@@ -460,6 +460,47 @@ async function upsertProduct(
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // IMAGE SYNC (update path)
+    // Replace all images whenever Odoo sends an `images` array
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    if (p.images && Array.isArray(p.images) && p.images.length > 0) {
+      try {
+        // Delete all existing images for this product
+        await pg.raw(`DELETE FROM image WHERE product_id = ?`, [prodId])
+        // Re-insert the full gallery in order
+        for (let idx = 0; idx < p.images.length; idx++) {
+          const imgUrl = p.images[idx]
+          if (!imgUrl) continue
+          await pg.raw(
+            `INSERT INTO image (id, url, rank, product_id, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())`,
+            [genId("img"), imgUrl, idx, prodId]
+          )
+        }
+        // Also update thumbnail to be the first image
+        await pg.raw(
+          `UPDATE product SET thumbnail = ?, updated_at = NOW() WHERE id = ?`,
+          [p.images[0], prodId]
+        )
+        console.log(`[Odoo Webhook] Updated ${p.images.length} image(s) for product ${prodId}`)
+      } catch (imgErr) {
+        console.warn(`[Odoo Webhook] Image sync failed for ${prodId}: ${imgErr}`)
+      }
+    } else if (p.image_url) {
+      // If only a single image_url is provided, ensure it exists in the image table
+      try {
+        const existImgRes = await pg.raw(`SELECT id FROM image WHERE product_id = ? LIMIT 1`, [prodId])
+        if (existImgRes.rows?.length === 0) {
+          await pg.raw(
+            `INSERT INTO image (id, url, rank, product_id, created_at, updated_at) VALUES (?, ?, 0, ?, NOW(), NOW())`,
+            [genId("img"), p.image_url, prodId]
+          )
+        }
+      } catch (imgErr) {
+        console.warn(`[Odoo Webhook] Single image sync failed: ${imgErr}`)
+      }
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // CATEGORY SYNC
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const catHandle = odooCategoryToHandle(category)
@@ -664,19 +705,28 @@ async function upsertProduct(
     }
   }
 
-  if (thumbnail) {
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // IMAGE SYNC (create path)
+  // Insert all images from the `images` array sent by Odoo.
+  // images[0] is usually the same as image_url/thumbnail so we
+  // use the array as the single source of truth when present.
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  if (p.images && Array.isArray(p.images) && p.images.length > 0) {
+    // Use the full images array — rank starts at 0
+    for (let idx = 0; idx < p.images.length; idx++) {
+      const imgUrl = p.images[idx]
+      if (!imgUrl) continue
+      await pg.raw(
+        `INSERT INTO image (id, url, rank, product_id, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())`,
+        [genId("img"), imgUrl, idx, productId]
+      )
+    }
+  } else if (thumbnail) {
+    // Fallback: only the thumbnail is known — insert it as the single image
     await pg.raw(
       `INSERT INTO image (id, url, rank, product_id, created_at, updated_at) VALUES (?, ?, 0, ?, NOW(), NOW())`,
       [genId("img"), thumbnail, productId]
     )
-  }
-  if (p.images && Array.isArray(p.images)) {
-    for (let idx = 0; idx < p.images.length; idx++) {
-      await pg.raw(
-        `INSERT INTO image (id, url, rank, product_id, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())`,
-        [genId("img"), p.images[idx], idx + 1, productId]
-      )
-    }
   }
 
   if (salesChannelId) {
