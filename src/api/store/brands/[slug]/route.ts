@@ -39,7 +39,7 @@ export async function GET(
        p.description, p.metadata, p.created_at,
        pv.id        AS variant_id,
        pv.sku,
-       pv.inventory_quantity,
+       pv.manage_inventory,
        pp.amount    AS price_amount,
        pp.currency_code
      FROM product p
@@ -94,7 +94,8 @@ export async function GET(
       variants: [{
         id: row.variant_id,
         sku: row.sku,
-        inventory_quantity: row.inventory_quantity ?? 1,
+        inventory_quantity: 1, // Fallback, frontend checks metadata or assumes in stock if manage_inventory is false
+        manage_inventory: row.manage_inventory ?? true,
         prices: priceAmountFils != null
           ? [{ amount: priceAmountFils, currency_code: "kwd" }]
           : [],
