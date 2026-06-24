@@ -6,6 +6,9 @@
  * and saves them to the frontend public/brands/ directory,
  * then updates the brand DB records with the correct logo_url.
  * 
+ * IMPORTANT: Uses `context: { bin_size: false }` to force Odoo to return
+ * actual base64 image data instead of just `true` (size marker).
+ * 
  * Run: node scripts/sync-brand-images.js
  */
 
@@ -44,7 +47,7 @@ if (!DATABASE_URL) {
 }
 
 // ── Odoo JSON-RPC helpers ──
-const client = axios.create({
+const odooClient = axios.create({
   baseURL: ODOO_URL,
   headers: { 'Content-Type': 'application/json' },
   httpsAgent: new https.Agent({ rejectUnauthorized: false }),
@@ -55,7 +58,7 @@ let requestId = 0;
 let uid = null;
 
 async function jsonRpc(url, method, params) {
-  const res = await client.post(url, {
+  const res = await odooClient.post(url, {
     jsonrpc: '2.0',
     method,
     params,
@@ -79,6 +82,24 @@ async function authenticate() {
   console.log('✅ Odoo authenticated, UID:', uid);
 }
 
+/**
+ * Read specific brand records by ID with bin_size=false
+ * This forces Odoo to return the actual base64 image data
+ * instead of just `true` (which means "has image but data not included").
+ */
+async function readBrandsWithImages(model, ids) {
+  return jsonRpc('/jsonrpc', 'call', {
+    service: 'object',
+    method: 'execute_kw',
+    args: [
+      ODOO_DB, uid, ODOO_PASS,
+      model, 'read',
+      [ids],
+      { fields: ['id', 'name', 'image_1920'], context: { bin_size: false } }
+    ],
+  });
+}
+
 async function searchRead(model, domain, fields, limit = 500) {
   return jsonRpc('/jsonrpc', 'call', {
     service: 'object',
@@ -100,23 +121,24 @@ async function main() {
   // 1. Authenticate with Odoo
   await authenticate();
 
-  // 2. Fetch all brands with image_1920
-  let brands = [];
+  // 2. First get brand IDs (without heavy image data)
+  let brandModel = 'custom.product.brand';
+  let brandList = [];
   try {
-    brands = await searchRead('custom.product.brand', [], ['id', 'name', 'image_1920'], 500);
-    console.log(`📦 Found ${brands.length} brands in Odoo (custom.product.brand)`);
+    brandList = await searchRead(brandModel, [], ['id', 'name'], 500);
+    console.log(`📦 Found ${brandList.length} brands in Odoo (${brandModel})`);
   } catch (e) {
-    console.warn('⚠️  custom.product.brand not available, trying product.brand...');
+    brandModel = 'product.brand';
     try {
-      brands = await searchRead('product.brand', [], ['id', 'name', 'image_1920'], 500);
-      console.log(`📦 Found ${brands.length} brands in Odoo (product.brand)`);
+      brandList = await searchRead(brandModel, [], ['id', 'name'], 500);
+      console.log(`📦 Found ${brandList.length} brands in Odoo (${brandModel})`);
     } catch (e2) {
-      console.error('❌ Neither custom.product.brand nor product.brand model found:', e2.message);
+      console.error('❌ Neither custom.product.brand nor product.brand model found');
       return;
     }
   }
 
-  if (!brands.length) {
+  if (!brandList.length) {
     console.log('No brands found in Odoo.');
     return;
   }
@@ -126,74 +148,100 @@ async function main() {
   await pg.connect();
   console.log('✅ Connected to PostgreSQL');
 
-  let synced = 0;
-  let skipped = 0;
-  let noImage = 0;
+  // 4. Get brand IDs that need images (those without logo_url in DB or file missing)
+  const brandsNeedingImages = [];
+  const brandMap = new Map(); // name -> { id in medusa, current_logo }
 
-  for (const odooBrand of brands) {
+  for (const odooBrand of brandList) {
     const name = (odooBrand.name || '').trim();
     if (!name) continue;
 
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const img = odooBrand.image_1920;
-
-    // Check if brand exists in Medusa DB
     const existing = await pg.query(
       'SELECT id, logo_url FROM brand WHERE LOWER(name) = $1',
       [name.toLowerCase()]
     );
 
-    if (existing.rows.length === 0) {
-      console.log(`   ⏭  "${name}" not found in Medusa DB, skipping`);
-      skipped++;
-      continue;
-    }
+    if (existing.rows.length === 0) continue;
 
     const brandId = existing.rows[0].id;
     const currentLogo = existing.rows[0].logo_url;
 
-    // Skip if brand already has a good logo (SVG or existing file)
+    // Check if we already have a working logo file
+    let hasWorkingLogo = false;
     if (currentLogo) {
       const logoPath = currentLogo.startsWith('/brands/')
         ? path.join(OUT_DIR, currentLogo.replace('/brands/', ''))
         : null;
-      if (logoPath && fs.existsSync(logoPath)) {
-        console.log(`   ✓  "${name}" already has logo: ${currentLogo}`);
-        skipped++;
-        continue;
-      }
+      hasWorkingLogo = logoPath && fs.existsSync(logoPath);
     }
 
-    // Process image from Odoo
-    if (!img || img === true || (typeof img === 'string' && img.length < 200)) {
-      console.log(`   ⚠  "${name}" has no image in Odoo`);
-      noImage++;
+    if (!hasWorkingLogo) {
+      brandsNeedingImages.push(odooBrand.id);
+      brandMap.set(odooBrand.id, { name, medusaId: brandId, currentLogo });
+    }
+  }
+
+  console.log(`\n🔍 ${brandsNeedingImages.length} brands need images. Fetching with bin_size=false...`);
+
+  if (brandsNeedingImages.length === 0) {
+    console.log('All brands already have images!');
+    await pg.end();
+    return;
+  }
+
+  // 5. Fetch brands with actual image data (bin_size=false)
+  //    Process in batches of 10 to avoid timeout
+  let synced = 0;
+  let noImage = 0;
+  const BATCH_SIZE = 10;
+
+  for (let i = 0; i < brandsNeedingImages.length; i += BATCH_SIZE) {
+    const batchIds = brandsNeedingImages.slice(i, i + BATCH_SIZE);
+    let brandsWithImages;
+    try {
+      brandsWithImages = await readBrandsWithImages(brandModel, batchIds);
+    } catch (e) {
+      console.error(`   ❌ Failed to fetch batch ${i}:`, e.message);
       continue;
     }
 
-    // Save base64 image to disk
-    const fname = `${slug}-brand.png`;
-    const fpath = path.join(OUT_DIR, fname);
+    for (const brand of brandsWithImages) {
+      const info = brandMap.get(brand.id);
+      if (!info) continue;
 
-    try {
-      fs.writeFileSync(fpath, Buffer.from(img, 'base64'));
-      const logoUrl = `/brands/${fname}`;
+      const img = brand.image_1920;
 
-      // Update the DB
-      await pg.query('UPDATE brand SET logo_url = $1, updated_at = NOW() WHERE id = $2', [
-        logoUrl,
-        brandId,
-      ]);
+      if (!img || img === false || (typeof img === 'string' && img.length < 200)) {
+        console.log(`   ⚠  "${info.name}" has no image in Odoo`);
+        noImage++;
+        continue;
+      }
 
-      console.log(`   ✅ "${name}" → ${logoUrl} (${(Buffer.from(img, 'base64').length / 1024).toFixed(1)}KB)`);
-      synced++;
-    } catch (e) {
-      console.error(`   ❌ Failed to save image for "${name}":`, e.message);
+      // Save base64 image to disk
+      const slug = info.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const fname = `${slug}-brand.png`;
+      const fpath = path.join(OUT_DIR, fname);
+
+      try {
+        const buf = Buffer.from(img, 'base64');
+        fs.writeFileSync(fpath, buf);
+        const logoUrl = `/brands/${fname}`;
+
+        await pg.query('UPDATE brand SET logo_url = $1, updated_at = NOW() WHERE id = $2', [
+          logoUrl,
+          info.medusaId,
+        ]);
+
+        console.log(`   ✅ "${info.name}" → ${logoUrl} (${(buf.length / 1024).toFixed(1)}KB)`);
+        synced++;
+      } catch (e) {
+        console.error(`   ❌ Failed to save image for "${info.name}":`, e.message);
+      }
     }
   }
 
   await pg.end();
-  console.log(`\n🎉 Done! Synced: ${synced}, Skipped: ${skipped}, No image: ${noImage}`);
+  console.log(`\n🎉 Done! Synced: ${synced}, No image in Odoo: ${noImage}`);
 }
 
 main().catch((e) => {
