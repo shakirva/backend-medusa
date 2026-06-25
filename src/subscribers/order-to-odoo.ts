@@ -35,12 +35,9 @@ async function authenticateOdoo(): Promise<number | null> {
   }
 }
 
-/**
- * Find Odoo product by SKU (default_code)
- */
-async function findOdooProductBySku(uid: number, sku: string): Promise<number | null> {
+async function findOdooProductBySku(uid: number, sku: string, logger: any): Promise<number | null> {
   try {
-    // First try to match by default_code (SKU)
+    // First try to match by default_code (SKU) in product.product
     let response = await axios.post(`${ODOO_URL}/jsonrpc`, {
       jsonrpc: "2.0",
       method: "call",
@@ -56,17 +53,34 @@ async function findOdooProductBySku(uid: number, sku: string): Promise<number | 
       return response.data.result[0]
     }
     
-    // Try with ODOO- prefix stripped
+    // Try with ODOO- prefix stripped. The stripped ID is typically the product.template ID
     if (sku.startsWith("ODOO-")) {
-      const odooId = parseInt(sku.replace("ODOO-", ""))
-      if (!isNaN(odooId)) {
-        return odooId
+      const templateId = parseInt(sku.replace("ODOO-", ""))
+      if (!isNaN(templateId)) {
+        // Query the product.template to get its product_variant_id (which is the actual product.product ID we need for the order line)
+        const tmplResponse = await axios.post(`${ODOO_URL}/jsonrpc`, {
+          jsonrpc: "2.0",
+          method: "call",
+          params: {
+            service: "object",
+            method: "execute_kw",
+            args: [ODOO_DB, uid, ODOO_API_KEY, "product.template", "read", [[templateId], ["product_variant_id"]]]
+          },
+          id: 11
+        })
+        
+        if (tmplResponse.data.result && tmplResponse.data.result.length > 0) {
+          const variantData = tmplResponse.data.result[0].product_variant_id
+          if (variantData && Array.isArray(variantData) && variantData.length > 0) {
+            return variantData[0] // The product.product ID
+          }
+        }
       }
     }
     
     return null
   } catch (error) {
-    console.error(`Failed to find Odoo product for SKU ${sku}:`, error)
+    logger.error(`Failed to find Odoo product for SKU ${sku}: ${error}`)
     return null
   }
 }
@@ -108,6 +122,7 @@ async function createOdooOrder(uid: number, orderData: any, logger: any): Promis
             street: orderData.shipping_address?.address_1 || "",
             city: orderData.shipping_address?.city || "",
             zip: orderData.shipping_address?.postal_code || "",
+            company_id: 4, // Explicitly set to MarkaSouq
             customer_rank: 1
           }]]
         },
@@ -124,7 +139,7 @@ async function createOdooOrder(uid: number, orderData: any, logger: any): Promis
       const productName = item.title || item.variant?.title || "Product"
       
       // Try to find matching Odoo product by SKU
-      const odooProductId = sku ? await findOdooProductBySku(uid, sku) : null
+      const odooProductId = sku ? await findOdooProductBySku(uid, sku, logger) : null
       
       const lineData: any = {
         name: productName,
@@ -151,6 +166,7 @@ async function createOdooOrder(uid: number, orderData: any, logger: any): Promis
         method: "execute_kw",
         args: [ODOO_DB, uid, ODOO_API_KEY, "sale.order", "create", [{
           partner_id: partnerId,
+          company_id: 4, // Explicitly set to MarkaSouq company to prevent mismatch
           client_order_ref: orderData.id,
           note: `Order from Marqa Souq - ${orderData.id}`,
           order_line: orderLines
@@ -161,6 +177,9 @@ async function createOdooOrder(uid: number, orderData: any, logger: any): Promis
     
     const odooOrderId = orderCreate.data.result
     if (!odooOrderId) {
+      if (orderCreate.data.error) {
+        logger.error(`Odoo error: ${JSON.stringify(orderCreate.data.error.data || orderCreate.data.error)}`)
+      }
       return { orderId: null, confirmed: false }
     }
     
