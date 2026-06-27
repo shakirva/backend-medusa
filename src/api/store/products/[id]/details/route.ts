@@ -169,26 +169,67 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
     }
 
     // Build specifications from metadata and product fields
+    // Priority: 1) Resolved Odoo attribute specs, 2) Odoo metadata, 3) Native Medusa fields
     const specifications: Record<string, string> = {}
-    if (product.weight) specifications["Weight"] = `${product.weight}g`
+
+    // 1. From resolved Odoo attribute lines (stored during sync)
+    if (metadata.specifications && typeof metadata.specifications === 'object') {
+      for (const [key, val] of Object.entries(metadata.specifications)) {
+        if (val && typeof val === 'string' && val.trim()) {
+          specifications[key] = val
+        }
+      }
+    }
+
+    // 2. From Odoo-synced metadata fields
+    if (metadata.brand && !specifications["Brand"]) specifications["Brand"] = String(metadata.brand)
+    if (metadata.odoo_sku) specifications["SKU"] = String(metadata.odoo_sku)
+    if (metadata.odoo_barcode) specifications["Barcode"] = String(metadata.odoo_barcode)
+    if (metadata.odoo_category_name) specifications["Category"] = String(metadata.odoo_category_name)
+    if (metadata.sub_category) specifications["Sub Category"] = String(metadata.sub_category)
+    if (metadata.uom) specifications["Unit of Measure"] = String(metadata.uom)
+    if (metadata.hs_code) specifications["HS Code"] = String(metadata.hs_code)
+    if (metadata.origin_country) specifications["Country of Origin"] = String(metadata.origin_country)
+    if (metadata.weight_unit && (product.weight || metadata.odoo_stock !== undefined)) {
+      const w = product.weight || 0
+      if (w > 0) specifications["Weight"] = `${w} ${metadata.weight_unit}`
+    }
+    if (metadata.volume && Number(metadata.volume) > 0) {
+      specifications["Volume"] = `${metadata.volume} ${metadata.volume_unit || 'm³'}`
+    }
+    if (metadata.lead_time_days && Number(metadata.lead_time_days) > 0) {
+      specifications["Lead Time"] = `${metadata.lead_time_days} days`
+    }
+
+    // 3. Native Medusa fields (fallbacks)
+    if (product.weight && !specifications["Weight"]) specifications["Weight"] = `${product.weight}g`
     if (product.length) specifications["Length"] = `${product.length}cm`
     if (product.height) specifications["Height"] = `${product.height}cm`
     if (product.width) specifications["Width"] = `${product.width}cm`
     if (product.material) specifications["Material"] = product.material
-    if (product.origin_country) specifications["Origin"] = product.origin_country
-    if (metadata.odoo_barcode) specifications["Barcode"] = metadata.odoo_barcode
-    if (metadata.odoo_sku) specifications["SKU"] = metadata.odoo_sku
-    if (metadata.odoo_category) {
-      const catParts = metadata.odoo_category.split(" / ")
-      specifications["Category"] = catParts[catParts.length - 1]
+    if (product.origin_country && !specifications["Country of Origin"]) specifications["Origin"] = product.origin_country
+
+    // 4. Fallback: parse rich ecommerce description for specs if no attribute specs found
+    if (Object.keys(specifications).length <= 3 && metadata.ecommerce_description) {
+      // Try to extract key-value pairs from HTML description (common Odoo pattern)
+      const htmlDesc = String(metadata.ecommerce_description)
+      const specPattern = /<(?:tr|li)[^>]*>\s*<(?:td|strong|b)[^>]*>([^<]+)<\/(?:td|strong|b)>\s*[:\-]?\s*<(?:td|span)[^>]*>([^<]+)/gi
+      let match
+      while ((match = specPattern.exec(htmlDesc)) !== null) {
+        const key = match[1].trim()
+        const val = match[2].trim()
+        if (key && val && key.length < 50 && val.length < 200) {
+          specifications[key] = val
+        }
+      }
     }
 
     // Build overview
     const overview = {
       description: product.description || "",
       subtitle: product.subtitle || "",
-      html_description: metadata.ecommerce_description_html || null,
-      brand: extractBrand(product.title),
+      html_description: metadata.ecommerce_description || metadata.ecommerce_description_html || null,
+      brand: metadata.brand || metadata.brand_name || extractBrand(product.title),
     }
 
     // Build images array
@@ -228,9 +269,9 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       };
     })
 
-    // Stock availability
-    const in_stock = metadata.stock_qty > 0 || metadata.stock_free_qty > 0
-    const stock_quantity = metadata.stock_qty || 0
+    // Stock availability — check odoo_stock (primary), then stock_qty/stock_free_qty fallbacks
+    const in_stock = (metadata.odoo_stock || metadata.stock_qty || metadata.stock_free_qty || 0) > 0
+    const stock_quantity = metadata.odoo_stock || metadata.stock_qty || 0
 
     res.json({
       product: {
@@ -284,7 +325,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
         // Metadata (Odoo sync info)
         odoo_id: metadata.odoo_id || null,
-        brand: extractBrand(product.title),
+        brand: metadata.brand || metadata.brand_name || extractBrand(product.title),
       },
     })
   } catch (error: any) {

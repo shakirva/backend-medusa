@@ -9,13 +9,24 @@ import { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils"
 
 function slugify(text: string): string {
-  return text
+  let slug = text
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "")
     .replace(/\s+/g, "-")
     .replace(/(^-|-$)/g, "")
     .substring(0, 100)
+  // Fallback: if slug is empty (e.g., Arabic/Unicode text), generate one
+  if (!slug) {
+    slug = `cat-${Date.now().toString(36)}${Math.random().toString(36).substring(2, 6)}`
+  }
+  return slug
 }
+
+// Category names to exclude from syncing to the website
+const EXCLUDED_CATEGORY_PATTERNS = [
+  'expo', 'wholesale', 'previous', 'test category', 'demo', 'archive',
+  'old category', 'deprecated', 'draft'
+]
 
 export default async function odooCategorySyncJob(container: MedusaContainer) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
@@ -45,21 +56,35 @@ export default async function odooCategorySyncJob(container: MedusaContainer) {
       return
     }
 
-    logger.info(`[Odoo Category Sync] Got ${odooCategories.length} categories from Odoo.`)
+    logger.info(`[Odoo Category Sync] Got ${odooCategories.length} categories from Odoo (before filtering).`)
+
+    // Filter out unwanted categories (expo, wholesale, etc.)
+    const filteredCategories = odooCategories.filter((cat: any) => {
+      const name = (cat.name || '').toLowerCase().trim()
+      return !EXCLUDED_CATEGORY_PATTERNS.some(pattern => name.includes(pattern))
+    })
+
+    if (filteredCategories.length < odooCategories.length) {
+      logger.info(`[Odoo Category Sync] Excluded ${odooCategories.length - filteredCategories.length} categories (expo/wholesale/etc.).`)
+    }
 
     let created = 0
     let updated = 0
     let errors = 0
     const odooIdToHandle = new Map<number, string>()
 
-    // Process root categories first (no parent), then children
-    const rootCategories = odooCategories.filter((c: any) => !c.parent_id)
-    const childCategories = odooCategories.filter((c: any) => !!c.parent_id)
+    // Sort categories by parent_path depth (number of slashes or path length)
+    // shorter paths (roots/parents) will be processed first,
+    // ensuring parent categories are ALWAYS created in Medusa before their children.
+    filteredCategories.sort((a: any, b: any) => {
+      const depthA = (a.parent_path || "").split("/").filter(Boolean).length
+      const depthB = (b.parent_path || "").split("/").filter(Boolean).length
+      return depthA - depthB
+    })
 
     const processCategory = async (oCategory: any, parentMedusaId: string | null) => {
       try {
         const handle = slugify(oCategory.name)
-        if (!handle) return
         odooIdToHandle.set(oCategory.id, handle)
 
         const metadata = { odoo_id: oCategory.id }
@@ -96,13 +121,8 @@ export default async function odooCategorySyncJob(container: MedusaContainer) {
       }
     }
 
-    // Process roots first
-    for (const cat of rootCategories) {
-      await processCategory(cat, null)
-    }
-
-    // Process children, resolving parent by odoo_id
-    for (const cat of childCategories) {
+    // Process categories in hierarchy order
+    for (const cat of filteredCategories) {
       const parentOdooId = Array.isArray(cat.parent_id) ? cat.parent_id[0] : null
       const parentHandle = parentOdooId ? odooIdToHandle.get(parentOdooId) : null
 
@@ -125,6 +145,30 @@ export default async function odooCategorySyncJob(container: MedusaContainer) {
       }
 
       await processCategory(cat, parentMedusaId)
+    }
+
+    // Clean up categories in Medusa that are no longer synced from Odoo
+    let softDeletedCount = 0
+    try {
+      const medusaCategories = await pgConnection.raw(
+        `SELECT id, metadata->>'odoo_id' as odoo_id FROM product_category WHERE metadata->>'odoo_id' IS NOT NULL AND deleted_at IS NULL`
+      )
+      const syncedOdooIds = new Set(filteredCategories.map((c: any) => String(c.id)))
+
+      for (const row of medusaCategories.rows) {
+        if (!syncedOdooIds.has(row.odoo_id)) {
+          await pgConnection.raw(
+            `UPDATE product_category SET deleted_at = NOW(), updated_at = NOW() WHERE id = ?`,
+            [row.id]
+          )
+          softDeletedCount++
+        }
+      }
+      if (softDeletedCount > 0) {
+        logger.info(`[Odoo Category Sync] Soft-deleted ${softDeletedCount} categories that are no longer marked for sync.`)
+      }
+    } catch (cleanupErr: any) {
+      logger.warn(`[Odoo Category Sync] Cleanup failed: ${cleanupErr.message}`)
     }
 
     // Record sync time

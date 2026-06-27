@@ -54,13 +54,24 @@ export default async function odooBrandSyncJob(container: MedusaContainer) {
       const name = (odooBrand.name || "").trim();
       if (!name) continue;
 
-      let logoUrl = null;
+      let logoUrl: string | null = null;
 
-      // Process Logo Image — use image_1920 field from Odoo
-      // Odoo returns base64 string with bin_size:false context, or `true` when bin_size is default
+      // Strategy 1 (Primary): Use Odoo direct image URL — always up-to-date, no file system dependency
+      const ODOO_URL = process.env.ODOO_URL?.replace(/\/$/, '') || "https://oskarllc-new-31031096.dev.odoo.com";
+      const odooDirectUrl = `${ODOO_URL}/web/image/custom.product.brand/${odooBrand.id}/image_1920`;
+      
+      // Check if brand has an image in Odoo (image_1920 will be truthy if exists)
       const img = odooBrand.image_1920;
-      logger.info(`[Brand Sync] ${name}: image_1920 type=${typeof img}, length=${typeof img === 'string' ? img.length : img}`);
-      if (img && img !== true && typeof img === 'string' && img.length > 200) {
+      if (img && img !== false) {
+        // Brand has an image in Odoo — use the direct URL
+        logoUrl = odooDirectUrl;
+        logger.info(`[Brand Sync] ${name}: using Odoo direct URL → ${logoUrl}`);
+      } else {
+        logger.warn(`[Brand Sync] ${name}: no image in Odoo (image_1920 is empty/false)`);
+      }
+
+      // Strategy 2 (Fallback): If we have actual base64 data AND are on production, save locally
+      if (!logoUrl && img && img !== true && typeof img === 'string' && img.length > 200) {
         const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
         
         try {
@@ -74,12 +85,10 @@ export default async function odooBrandSyncJob(container: MedusaContainer) {
             
             fs.writeFileSync(fpath, buf);
             logoUrl = IS_PROD ? '/brands/' + fname : '/static/brands/' + fname;
-            logger.info(`[Brand Sync] ${name}: saved logo → ${fname} (${buf.length} bytes)`);
+            logger.info(`[Brand Sync] ${name}: saved logo fallback → ${fname} (${buf.length} bytes)`);
         } catch(e: any) {
-            logger.error(`[Brand Sync] Failed to write image for ${name}: ${e.message}`);
+            logger.error(`[Brand Sync] Failed to write fallback image for ${name}: ${e.message}`);
         }
-      } else {
-        logger.warn(`[Brand Sync] ${name}: no usable image_1920 from Odoo (img=${img === true ? 'true (bin_size issue)' : 'empty/missing'})`);
       }
 
       // Upsert into DB manually using pgConnection because BrandService might not have upsert

@@ -49,6 +49,7 @@ export interface OdooProduct {
   standard_price: number                // Cost
   compare_list_price: number            // Compare-to / Was price
   retail_price: number                  // Retail price
+  x_ecommerce_price?: number            // eCommerce Website Sales Price (custom field)
   currency_id: M2O
 
   // ── Descriptions ──
@@ -289,6 +290,7 @@ export const ODOO_PRODUCT_TEMPLATE_FIELDS = [
 
   // Prices
   "list_price", "standard_price", "compare_list_price", "retail_price",
+  "x_ecommerce_price",
   "currency_id",
 
   // Descriptions
@@ -895,6 +897,8 @@ class OdooSyncService {
         cost_price: product.standard_price || 0,
         compare_price: product.compare_list_price || 0,
         retail_price: product.retail_price || 0,
+        ecommerce_price: product.x_ecommerce_price || null,  // Separate website sales price
+        list_price: product.list_price || 0,  // Original ERP sales price
         currency: product.currency_id ? product.currency_id[1] : null,
 
         // ── Descriptions ──
@@ -987,8 +991,10 @@ class OdooSyncService {
           weight: product.weight || 0,
           metadata: {
             odoo_product_id: product.id,
-            odoo_price: product.list_price || 0,
-            odoo_price_amount: Math.round((product.list_price || 0) * currencyMultiplier),
+            odoo_price: product.x_ecommerce_price || product.list_price || 0,
+            odoo_list_price: product.list_price || 0,
+            odoo_ecommerce_price: product.x_ecommerce_price || null,
+            odoo_price_amount: Math.round((product.x_ecommerce_price || product.list_price || 0) * currencyMultiplier),
             odoo_currency: currencyCode,
           },
         },

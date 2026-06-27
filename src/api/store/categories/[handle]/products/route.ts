@@ -78,11 +78,19 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       params.push(maxPrice)
     }
     if (brand) {
-      // Match against odoo_brand or brand_name in metadata, fallback to title starts-with
+      // Match against brand (primary), odoo_brand, or brand_name in metadata, fallback to title starts-with
       conditions.push(`(
-        LOWER(COALESCE(NULLIF(TRIM(p.metadata->>'odoo_brand'), ''), NULLIF(TRIM(p.metadata->>'brand_name'), ''))) = LOWER(?)
+        LOWER(COALESCE(
+          NULLIF(TRIM(p.metadata->>'brand'), ''),
+          NULLIF(TRIM(p.metadata->>'odoo_brand'), ''),
+          NULLIF(TRIM(p.metadata->>'brand_name'), '')
+        )) = LOWER(?)
         OR (
-          COALESCE(NULLIF(TRIM(p.metadata->>'odoo_brand'), ''), NULLIF(TRIM(p.metadata->>'brand_name'), '')) IS NULL
+          COALESCE(
+            NULLIF(TRIM(p.metadata->>'brand'), ''),
+            NULLIF(TRIM(p.metadata->>'odoo_brand'), ''),
+            NULLIF(TRIM(p.metadata->>'brand_name'), '')
+          ) IS NULL
           AND LOWER(p.title) LIKE LOWER(? || '%')
         )
       )`)
@@ -99,7 +107,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
       params.push(color)
     }
     if (inStock === "true") {
-      conditions.push("COALESCE((p.metadata->>'stock_qty')::numeric, 0) > 0")
+      conditions.push("COALESCE((p.metadata->>'odoo_stock')::numeric, COALESCE((p.metadata->>'stock_qty')::numeric, 0)) > 0")
     }
 
     // Sort mapping — outerOrderBy uses column aliases from the subquery SELECT
@@ -158,8 +166,8 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
         subtitle: p.subtitle,
         price: p.price ? parseFloat(p.price) : null,
         currency_code: p.currency_code || currency,
-        in_stock: (meta.odoo_qty || meta.stock_qty || 0) > 0,
-        brand: meta.odoo_brand || extractBrand(p.title),
+        in_stock: (meta.odoo_stock || meta.odoo_qty || meta.stock_qty || 0) > 0,
+        brand: meta.brand || meta.odoo_brand || meta.brand_name || extractBrand(p.title),
         created_at: p.created_at,
       }
     })

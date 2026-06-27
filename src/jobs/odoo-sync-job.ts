@@ -80,6 +80,27 @@ export default async function odooSyncJob(container: MedusaContainer) {
       try {
         const medusaData = odooSyncService.convertToMedusaProduct(odooProduct);
 
+        // Resolve Odoo attribute lines into human-readable specifications
+        // e.g., Color: "Red, Blue", Size: "S, M, L, XL"
+        try {
+          if (odooProduct.attribute_line_ids?.length > 0) {
+            const specifications: Record<string, string> = {}
+            const attrLines = await odooSyncService.fetchAttributeLines(odooProduct.attribute_line_ids)
+            for (const line of attrLines) {
+              const attrName = line.attribute_id?.[1] || "Unknown"
+              if (line.value_ids?.length > 0) {
+                const values = await odooSyncService.fetchAttributeValues(line.value_ids)
+                specifications[attrName] = values.map((v: any) => v.name).join(", ")
+              }
+            }
+            if (Object.keys(specifications).length > 0) {
+              medusaData.metadata.specifications = specifications
+            }
+          }
+        } catch (specErr: any) {
+          logger.warn(`[Odoo Sync Job] Could not resolve specs for ${odooProduct.id}: ${specErr.message}`)
+        }
+
         // Check if product exists by odoo_id
         const existing = await productService.listProducts(
           {} as any,
@@ -183,7 +204,8 @@ export default async function odooSyncJob(container: MedusaContainer) {
         }
 
         // Sync prices via Pricing module
-        const price = odooProduct.list_price || odooProduct.lst_price || 0;
+        // Priority: x_ecommerce_price (website-specific) > list_price (ERP default)
+        const price = odooProduct.x_ecommerce_price || odooProduct.list_price || (odooProduct as any).lst_price || 0;
         const currency = (odooProduct.currency_id?.[1] || "OMR").toString().toLowerCase();
 
         if (price > 0) {

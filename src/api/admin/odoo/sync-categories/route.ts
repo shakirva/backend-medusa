@@ -22,13 +22,23 @@ const CATEGORIES_UPLOAD_DIR = path.join(process.cwd(), "static", "uploads", "cat
 const CATEGORIES_URL_PREFIX = "/static/uploads/categories"
 
 function slugify(text: string): string {
-  return text
+  let slug = text
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "")
     .replace(/\s+/g, "-")
     .replace(/(^-|-$)/g, "")
     .substring(0, 100)
+  if (!slug) {
+    slug = `cat-${Date.now().toString(36)}${Math.random().toString(36).substring(2, 6)}`
+  }
+  return slug
 }
+
+// Category names to exclude from syncing to the website
+const EXCLUDED_CATEGORY_PATTERNS = [
+  'expo', 'wholesale', 'previous', 'test category', 'demo', 'archive',
+  'old category', 'deprecated', 'draft'
+]
 
 function saveBase64Image(base64Data: string | false, dir: string, filename: string): string | null {
   if (!base64Data || typeof base64Data !== "string") return null
@@ -89,7 +99,13 @@ export async function POST(req: MedusaRequest, res: MedusaResponse): Promise<voi
 
   try {
     // Fetch all public categories from Odoo
-    const odooCategories = await odoo.fetchPublicCategories()
+    let odooCategories = await odoo.fetchPublicCategories()
+
+    // Filter out unwanted categories (expo, wholesale, etc.)
+    odooCategories = odooCategories.filter((cat: any) => {
+      const name = (cat.name || '').toLowerCase().trim()
+      return !EXCLUDED_CATEGORY_PATTERNS.some(pattern => name.includes(pattern))
+    })
 
     if (odooCategories.length === 0) {
       res.json({

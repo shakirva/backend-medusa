@@ -84,6 +84,7 @@ export async function GET(req: MedusaRequest, res: MedusaResponse) {
 
     const brandResult = await pgConnection.raw(
       `SELECT DISTINCT COALESCE(
+          NULLIF(TRIM(p.metadata->>'brand'), ''),
           NULLIF(TRIM(p.metadata->>'odoo_brand'), ''),
           NULLIF(TRIM(p.metadata->>'brand_name'), ''),
           split_part(TRIM(p.title), ' ', 1)
