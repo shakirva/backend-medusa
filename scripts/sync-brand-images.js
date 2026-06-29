@@ -225,6 +225,7 @@ async function main() {
                       buf.slice(0, 100).toString('utf8').trim().startsWith('<?xml');
         
         const ext = isSvg ? '.svg' : '.png';
+        const slug = info.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
         const fname = `${slug}-brand${ext}`;
         const fpath = path.join(OUT_DIR, fname);
 
